@@ -60,8 +60,8 @@ Debes responder SIEMPRE en formato JSON estricto con las siguientes claves:
 
 // Modelos en orden de prioridad — si uno falla con 503/429, se intenta el siguiente
 const GEMINI_MODELS = [
-  "gemini-1.5-flash",
-  "gemini-1.5-flash-8b",
+  "gemini-3.8-flash",
+  "gemini-2.0-flash",
   "gemini-1.5-pro",
 ];
 
@@ -84,8 +84,8 @@ async function callGeminiWithFallback(prompt: string): Promise<string> {
       return response.text || "{}";
     } catch (err: any) {
       const status = err?.status ?? err?.error?.code;
-      // 503 = modelo no disponible, 429 = rate limit → intentar siguiente
-      if (status === 503 || status === 429) {
+      // 503 = modelo no disponible, 429 = rate limit, 404 = modelo no existe → intentar siguiente
+      if (status === 503 || status === 429 || status === 404) {
         console.warn(`⚠️ Modelo ${model} no disponible (${status}), probando siguiente...`);
         lastError = err;
         continue;
