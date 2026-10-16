@@ -22,6 +22,25 @@ export async function GET(request: NextRequest) {
   return new NextResponse("Token de verificación no válido", { status: 403 });
 }
 
+// Caché global en memoria para deduplicar mensajes reintentados por Meta
+const processedMessageIds = new Map<string, number>();
+
+function isDuplicateMessage(msgId: string): boolean {
+  if (!msgId) return false;
+  const now = Date.now();
+  // Limpiar mensajes con más de 10 minutos
+  for (const [id, timestamp] of processedMessageIds.entries()) {
+    if (now - timestamp > 10 * 60 * 1000) {
+      processedMessageIds.delete(id);
+    }
+  }
+  if (processedMessageIds.has(msgId)) {
+    return true;
+  }
+  processedMessageIds.set(msgId, now);
+  return false;
+}
+
 // 2. Recepción y procesamiento de Mensajes entrantes de WhatsApp (POST)
 export async function POST(request: NextRequest) {
   try {
@@ -44,6 +63,12 @@ export async function POST(request: NextRequest) {
         const contactName = contactProfile?.profile?.name || "Cliente WhatsApp";
 
         for (const msg of value.messages) {
+          // DEDUPLICACIÓN: Evitar responder dos veces si Meta reintenta el webhook
+          if (msg.id && isDuplicateMessage(msg.id)) {
+            console.log(`⏩ Mensaje duplicado ${msg.id} de WhatsApp ignorado (reintento de Meta).`);
+            continue;
+          }
+
           const fromPhone = `+${msg.from}`;
           let messageText = "";
 

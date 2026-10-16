@@ -62,13 +62,22 @@ Debes responder SIEMPRE en formato JSON estricto con las siguientes claves:
 }
 `;
 
-// Modelos verificados en orden de prioridad
+// Modelos en orden de estabilidad y velocidad
 const GEMINI_MODELS = [
-  "gemini-3.7-flash",
+  "gemini-3.5-flash",    // Máxima estabilidad y respuesta inmediata (<1s)
+  "gemini-3.7-flash",    // Modelo avanzado con fallback
+  "gemini-3.1-flash-lite", // Modelo ligero de alta velocidad
   "gemini-3.8-flash",
-  "gemini-3.5-flash",
-  "gemini-3.1-flash-lite",
 ];
+
+async function callWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout tras ${timeoutMs}ms`)), timeoutMs)
+    ),
+  ]);
+}
 
 async function callGeminiWithFallback(prompt: string): Promise<string> {
   let lastError: unknown;
@@ -76,27 +85,27 @@ async function callGeminiWithFallback(prompt: string): Promise<string> {
   for (const model of GEMINI_MODELS) {
     try {
       console.log(`🤖 Intentando modelo: ${model}`);
-      const response = await ai.models.generateContent({
-        model,
-        contents: prompt,
-        config: {
-          systemInstruction: SYSTEM_PROMPT,
-          responseMimeType: "application/json",
-          temperature: 0.7,
-        },
-      });
+      // Límite de 3.5 segundos por modelo para no demorar el webhook de Meta
+      const response = await callWithTimeout(
+        ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            systemInstruction: SYSTEM_PROMPT,
+            responseMimeType: "application/json",
+            temperature: 0.7,
+          },
+        }),
+        3500
+      );
       console.log(`✅ Éxito con modelo: ${model}`);
       return response.text || "{}";
     } catch (err: any) {
       const status = err?.status ?? err?.error?.code;
-      // 503 = modelo no disponible, 429 = rate limit, 404 = modelo no existe → intentar siguiente
-      if (status === 503 || status === 429 || status === 404) {
-        console.warn(`⚠️ Modelo ${model} no disponible (${status}), probando siguiente...`);
-        lastError = err;
-        continue;
-      }
-      // Otro error (401, 400, etc.) → lanzar inmediatamente
-      throw err;
+      console.warn(`⚠️ Modelo ${model} no respondió a tiempo o no disponible (${status || err.message}), probando siguiente...`);
+      lastError = err;
+      // Probar siguiente modelo
+      continue;
     }
   }
 
