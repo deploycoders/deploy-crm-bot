@@ -58,6 +58,47 @@ Debes responder SIEMPRE en formato JSON estricto con las siguientes claves:
 }
 `;
 
+// Modelos en orden de prioridad — si uno falla con 503/429, se intenta el siguiente
+const GEMINI_MODELS = [
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-8b",
+  "gemini-1.5-pro",
+];
+
+async function callGeminiWithFallback(prompt: string): Promise<string> {
+  let lastError: unknown;
+
+  for (const model of GEMINI_MODELS) {
+    try {
+      console.log(`🤖 Intentando modelo: ${model}`);
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          systemInstruction: SYSTEM_PROMPT,
+          responseMimeType: "application/json",
+          temperature: 0.7,
+        },
+      });
+      console.log(`✅ Éxito con modelo: ${model}`);
+      return response.text || "{}";
+    } catch (err: any) {
+      const status = err?.status ?? err?.error?.code;
+      // 503 = modelo no disponible, 429 = rate limit → intentar siguiente
+      if (status === 503 || status === 429) {
+        console.warn(`⚠️ Modelo ${model} no disponible (${status}), probando siguiente...`);
+        lastError = err;
+        continue;
+      }
+      // Otro error (401, 400, etc.) → lanzar inmediatamente
+      throw err;
+    }
+  }
+
+  // Todos los modelos fallaron
+  throw lastError;
+}
+
 export async function generateAIResponse(
   history: ConversationMessage[],
   newMessage: string
@@ -86,17 +127,7 @@ ${formattedHistory}
 
 Genera la respuesta en el formato JSON indicado.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        responseMimeType: "application/json",
-        temperature: 0.7,
-      },
-    });
-
-    const text = response.text || "{}";
+    const text = await callGeminiWithFallback(prompt);
     const parsed = JSON.parse(text) as AIResponse;
 
     return {
@@ -105,11 +136,12 @@ Genera la respuesta en el formato JSON indicado.`;
       handoffReason: parsed.handoffReason,
     };
   } catch (error) {
-    console.error("Error al generar respuesta con Gemini:", error);
+    // Error real (no es 503/429) — NO activar handoff para no silenciar el bot
+    console.error("Error al generar respuesta con Gemini (todos los modelos fallaron):", error);
     return {
-      replyText: "Disculpa la demora, en un momento un asesor te atenderá.",
-      requestHandoff: true,
-      handoffReason: "Error en motor de IA",
+      replyText: "Hola 👋 En breve un asesor de Deploy te atenderá. ¡Gracias por escribirnos!",
+      requestHandoff: false,
+      handoffReason: undefined,
     };
   }
 }

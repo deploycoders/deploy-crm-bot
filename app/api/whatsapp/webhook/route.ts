@@ -150,9 +150,15 @@ export async function POST(request: NextRequest) {
               (history || []) as any,
               messageText
             );
+            console.log(`🤖 Respuesta IA generada: "${aiResult.replyText}" | Handoff: ${aiResult.requestHandoff}`);
 
             // 3. Enviar respuesta por WhatsApp
-            await sendWhatsAppMessage(fromPhone, aiResult.replyText);
+            const waResult = await sendWhatsAppMessage(fromPhone, aiResult.replyText);
+            if (!waResult.success) {
+              console.error("❌ Error enviando mensaje a WhatsApp:", JSON.stringify(waResult.error));
+            } else {
+              console.log(`✅ Mensaje enviado a WhatsApp para ${fromPhone}`);
+            }
 
             // 4. Guardar respuesta del bot en Supabase
             await supabase.from("messages").insert({
