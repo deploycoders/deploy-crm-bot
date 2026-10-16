@@ -75,7 +75,12 @@ export default function ChatPage() {
       if (data) {
         setConversations(data as Conversation[]);
         if (data.length > 0 && !selectedId) {
-          setSelectedId(data[0].id);
+          const urlParamId =
+            typeof window !== "undefined"
+              ? new URLSearchParams(window.location.search).get("id")
+              : null;
+          const matched = data.find((c) => c.id === urlParamId);
+          setSelectedId(matched ? matched.id : data[0].id);
         }
       }
     } finally {
