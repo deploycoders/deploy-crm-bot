@@ -58,11 +58,12 @@ Debes responder SIEMPRE en formato JSON estricto con las siguientes claves:
 }
 `;
 
-// Modelos en orden de prioridad — si uno falla con 503/429, se intenta el siguiente
+// Modelos verificados en orden de prioridad
 const GEMINI_MODELS = [
+  "gemini-3.7-flash",
   "gemini-3.8-flash",
-  "gemini-2.0-flash",
-  "gemini-1.5-pro",
+  "gemini-3.5-flash",
+  "gemini-3.1-flash-lite",
 ];
 
 async function callGeminiWithFallback(prompt: string): Promise<string> {
@@ -128,18 +129,38 @@ ${formattedHistory}
 Genera la respuesta en el formato JSON indicado.`;
 
     const text = await callGeminiWithFallback(prompt);
-    const parsed = JSON.parse(text) as AIResponse;
+    
+    // Parseo resiliente del JSON devuelto por el modelo
+    let replyText = "Hola, ¿en qué te podemos colaborar hoy en Deploy?";
+    let requestHandoff = false;
+    let handoffReason: string | undefined = undefined;
+
+    try {
+      const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+      const firstBrace = cleaned.indexOf("{");
+      const lastBrace = cleaned.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        const parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
+        replyText = parsed.replyText || replyText;
+        requestHandoff = Boolean(parsed.requestHandoff);
+        handoffReason = parsed.handoffReason;
+      } else if (cleaned) {
+        replyText = cleaned;
+      }
+    } catch (parseErr) {
+      console.warn("Aviso: el modelo no devolvió JSON puro, usando texto directo:", text);
+      replyText = text.replace(/```/g, "").trim() || replyText;
+    }
 
     return {
-      replyText: parsed.replyText || "Hola, ¿en qué te puedo colaborar hoy?",
-      requestHandoff: Boolean(parsed.requestHandoff),
-      handoffReason: parsed.handoffReason,
+      replyText,
+      requestHandoff,
+      handoffReason,
     };
   } catch (error) {
-    // Error real (no es 503/429) — NO activar handoff para no silenciar el bot
     console.error("Error al generar respuesta con Gemini (todos los modelos fallaron):", error);
     return {
-      replyText: "Hola 👋 En breve un asesor de Deploy te atenderá. ¡Gracias por escribirnos!",
+      replyText: "Hola 👋 Gracias por comunicarte con Deploy. En un momento te atendemos.",
       requestHandoff: false,
       handoffReason: undefined,
     };
