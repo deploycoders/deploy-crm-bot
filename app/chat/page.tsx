@@ -103,6 +103,22 @@ export default function ChatPage() {
     }
   };
 
+  // Escuchar selección rápida de chat desde notificaciones globales
+  useEffect(() => {
+    const handleSelectChat = (e: Event) => {
+      const customEvent = e as CustomEvent<{ id: string }>;
+      if (customEvent.detail?.id) {
+        setSelectedId(customEvent.detail.id);
+        setMobileView("chat");
+      }
+    };
+
+    window.addEventListener("crm:select-chat", handleSelectChat);
+    return () => {
+      window.removeEventListener("crm:select-chat", handleSelectChat);
+    };
+  }, []);
+
   // 1. Cargar lista de conversaciones
   const fetchConversations = async () => {
     try {

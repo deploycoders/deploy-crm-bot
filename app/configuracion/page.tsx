@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  BellRing,
   Bot,
   CheckCircle2,
   Database,
@@ -13,6 +14,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import { playMessageChime, playHandoffAlert, initAudio } from "@/lib/sound";
 
 export default function ConfiguracionPage() {
   return (
@@ -33,7 +35,7 @@ export default function ConfiguracionPage() {
       </header>
 
       {/* Grid de Estado de Servicios */}
-      <section className="grid gap-6 md:grid-cols-3">
+      <section className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         {/* WhatsApp Cloud API */}
         <article className="rounded-xl border border-line bg-panel/70 p-5 shadow-xl backdrop-blur-xl space-y-4">
           <div className="flex items-center justify-between">
@@ -133,6 +135,55 @@ export default function ConfiguracionPage() {
             <div className="flex justify-between py-1">
               <span className="text-slate-400">Websockets:</span>
               <span className="text-sky-400">Live Updates Activo</span>
+            </div>
+          </div>
+        </article>
+
+        {/* Notificaciones y Alertas Sonoras */}
+        <article className="rounded-xl border border-line bg-panel/70 p-5 shadow-xl backdrop-blur-xl space-y-4">
+          <div className="flex items-center justify-between">
+            <span className="grid size-10 place-items-center rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              <BellRing className="size-5" />
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-400">
+              <CheckCircle2 className="size-3" />
+              Web Audio
+            </span>
+          </div>
+
+          <div>
+            <h3 className="text-base font-semibold text-white">Alertas & Sonido</h3>
+            <p className="text-xs text-slate-400 mt-0.5">Mensajes y Handoff a Asesor</p>
+          </div>
+
+          <div className="space-y-2 text-xs border-t border-line pt-3 text-slate-300">
+            <div className="flex items-center justify-between py-1">
+              <span className="text-slate-400">Mensajes Entrantes:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  initAudio().then(() => playMessageChime());
+                }}
+                className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400 hover:bg-emerald-500/20 transition"
+              >
+                🔔 Probar Chime
+              </button>
+            </div>
+            <div className="flex items-center justify-between py-1">
+              <span className="text-slate-400">Alerta de Asesor:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  initAudio().then(() => playHandoffAlert());
+                }}
+                className="rounded border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300 hover:bg-rose-500/20 transition"
+              >
+                🚨 Probar Alerta
+              </button>
+            </div>
+            <div className="flex justify-between py-1">
+              <span className="text-slate-400">Escritorio:</span>
+              <span className="text-emerald-400 font-medium">Toasts & Desktop API</span>
             </div>
           </div>
         </article>

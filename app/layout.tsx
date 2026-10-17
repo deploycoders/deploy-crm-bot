@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Sidebar } from "@/components/Sidebar";
+import { GlobalNotifications } from "@/components/GlobalNotifications";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -15,6 +16,7 @@ export default function RootLayout({
   return (
     <html lang="es">
       <body className="bg-ink text-slate-100 antialiased selection:bg-signal/20 selection:text-signal">
+        <GlobalNotifications />
         <div className="min-h-screen lg:flex">
           <Sidebar />
           <main className="min-w-0 flex-1 px-2 py-2 sm:px-6 sm:py-5 lg:px-8 lg:py-8">
