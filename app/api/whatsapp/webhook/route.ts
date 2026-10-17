@@ -161,6 +161,32 @@ export async function POST(request: NextRequest) {
           console.log(`📩 Mensaje de ${fromPhone}: "${messageText}" | Estado: ${convStatus}`);
 
           // D. LÓGICA DE DECISIÓN: ¿Responde la IA o interviene el humano?
+          // Si la conversación estaba resuelta y el cliente vuelve a escribir, reactivar la IA
+          if (convStatus === "resolved") {
+            convStatus = "ai_active";
+            await supabase
+              .from("conversations")
+              .update({ status: "ai_active" })
+              .eq("id", conversationId);
+          }
+
+          // Si el cliente estaba en waiting_agent pero escribe pidiendo el bot o seleccionando opciones del menú
+          if (convStatus === "waiting_agent") {
+            const wantsBot = /^(bot|menu|menú|reiniciar|activar bot|volver|1|2|3)$/i.test(messageText.trim());
+            if (wantsBot) {
+              convStatus = "ai_active";
+              await supabase
+                .from("conversations")
+                .update({ status: "ai_active" })
+                .eq("id", conversationId);
+              await supabase.from("messages").insert({
+                conversation_id: conversationId,
+                sender: "system",
+                content: "El cliente solicitó interactuar nuevamente con el Bot IA.",
+              });
+            }
+          }
+
           if (convStatus === "ai_active") {
             // 1. Obtener historial reciente para memoria
             const { data: history } = await supabase

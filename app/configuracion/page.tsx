@@ -87,15 +87,15 @@ export default function ConfiguracionPage() {
           <div className="space-y-2 text-xs border-t border-line pt-3 text-slate-300">
             <div className="flex justify-between py-1">
               <span className="text-slate-400">Modelo Activo:</span>
-              <span className="font-mono text-signal">gemini-3.5-flash</span>
+              <span className="font-mono text-signal">gemini-3.1-flash-lite</span>
             </div>
             <div className="flex justify-between py-1">
               <span className="text-slate-400">Respaldo / Fallback:</span>
-              <span className="font-mono text-slate-300">gemini-3.7-flash</span>
+              <span className="font-mono text-slate-300">gemini-3.8-flash</span>
             </div>
             <div className="flex justify-between py-1">
               <span className="text-slate-400">Handoff Humano:</span>
-              <span className="text-emerald-400">Detección Automática</span>
+              <span className="text-emerald-400">Solo si lo elige o venta segura</span>
             </div>
           </div>
         </article>
@@ -186,7 +186,7 @@ export default function ConfiguracionPage() {
               <li>• <b>Enfoque Tecnológico:</b> Solo responde sobre desarrollo, software, automatizaciones y tecnología de Deploy.</li>
               <li>• <b>Concisión en WhatsApp:</b> Mensajes cortos de 2 a 3 oraciones para fácil lectura móvil.</li>
               <li>• <b>Deduplicación:</b> Protección contra mensajes dobles por reintentos de Meta en red.</li>
-              <li>• <b>Transferencia Fluida:</b> Si el lead pide hablar con una persona o quiere cotizar un contrato formal, se activa el handoff humano en el CRM.</li>
+              <li>• <b>Transferencia a Asesor:</b> Solo pasa a asesor si el cliente lo elige explícitamente en el chat o es una venta asegurada (listo para pagar/contratar). Del resto, siempre atiende el bot.</li>
             </ul>
           </div>
         </div>
