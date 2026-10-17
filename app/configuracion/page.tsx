@@ -97,7 +97,7 @@ export default function ConfiguracionPage() {
             </div>
             <div className="flex justify-between py-1">
               <span className="text-slate-400">Espera Debounce:</span>
-              <span className="font-mono text-emerald-400">7s (Agrupa mensajes)</span>
+              <span className="font-mono text-emerald-400">3.5s (Serverless Safe)</span>
             </div>
             <div className="flex justify-between py-1">
               <span className="text-slate-400">Handoff Humano:</span>
@@ -238,7 +238,7 @@ export default function ConfiguracionPage() {
               Reglas de Seguridad y Negocio (Guardrails):
             </h4>
             <ul className="space-y-2 text-slate-300">
-              <li>• <b>Espera Inteligente (Debounce 7s):</b> El bot espera a que el cliente termine de escribir para consolidar múltiples mensajes consecutivos y responder todo en un único mensaje.</li>
+              <li>• <b>Espera Inteligente (Debounce 3.5s):</b> El bot espera a que el cliente termine de escribir para consolidar múltiples mensajes consecutivos y responder todo en un único mensaje.</li>
               <li>• <b>Menú Permanente:</b> Mantiene activo el menú principal (1️⃣ FAQ, 2️⃣ Servicios, 3️⃣ Soporte, 4️⃣ Asesor) o un pie de navegación en cada interacción.</li>
               <li>• <b>Enfoque Tecnológico:</b> Solo responde sobre desarrollo, software, automatizaciones y tecnología de Deploy.</li>
               <li>• <b>Deduplicación:</b> Protección contra mensajes dobles por reintentos de Meta en red.</li>

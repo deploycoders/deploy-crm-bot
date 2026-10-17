@@ -326,29 +326,21 @@ export function GlobalNotifications() {
           <BellRing className="size-3 text-signal" />
           <span>Test</span>
         </button>
-      </div>
 
-      {/* Banner de solicitud de permisos de escritorio si están pendientes */}
-      {showPermPrompt && (
-        <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-xl border border-signal/30 bg-panel/95 px-4 py-2.5 shadow-2xl backdrop-blur-xl text-xs text-white">
-          <Bell className="size-4 text-signal shrink-0 animate-bounce" />
-          <span>¿Deseas recibir alertas de escritorio cuando lleguen mensajes de clientes?</span>
-          <div className="flex items-center gap-1.5">
+        {desktopPerm === "default" && (
+          <>
+            <span className="text-slate-600">|</span>
             <button
               onClick={requestDesktopPermission}
-              className="rounded-lg bg-signal px-2.5 py-1 font-semibold text-ink hover:opacity-90 transition"
+              title="Activar avisos de escritorio"
+              className="text-amber-400 hover:text-amber-300 transition flex items-center gap-1 text-[11px]"
             >
-              Permitir
+              <Bell className="size-3" />
+              <span>Avisos PC</span>
             </button>
-            <button
-              onClick={() => setShowPermPrompt(false)}
-              className="rounded-lg border border-line px-2 py-1 text-slate-400 hover:text-white transition"
-            >
-              Ahora no
-            </button>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </div>
 
       {/* Contenedor flotante de notificaciones (Toasts / Alertas) */}
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-3 pointer-events-none max-w-sm sm:max-w-md w-full">

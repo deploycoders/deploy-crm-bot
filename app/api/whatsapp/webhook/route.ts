@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { scheduleAIResponse } from "@/lib/debounce";
+import { generateAIResponse } from "@/lib/ai";
+import { sendWhatsAppMessage } from "@/lib/whatsapp";
 
 // 1. Verificación del Webhook por parte de Meta (GET)
 export async function GET(request: NextRequest) {
@@ -141,14 +142,25 @@ export async function POST(request: NextRequest) {
             convStatus = newConv.status;
           }
 
-          // C. Guardar el mensaje entrante del cliente
-          await supabase.from("messages").insert({
-            conversation_id: conversationId,
-            sender: "client",
-            content: messageText,
-          });
+          // C. Guardar el mensaje entrante del cliente y obtener su ID
+          let currentMsgId: string | null = null;
+          const { data: insertedMsg, error: msgInsertErr } = await supabase
+            .from("messages")
+            .insert({
+              conversation_id: conversationId,
+              sender: "client",
+              content: messageText,
+            })
+            .select("id")
+            .single();
 
-          // Actualizar vista previa
+          if (msgInsertErr) {
+            console.error("Error al insertar mensaje del cliente:", msgInsertErr);
+          } else if (insertedMsg) {
+            currentMsgId = insertedMsg.id;
+          }
+
+          // Actualizar vista previa de la conversación
           await supabase
             .from("conversations")
             .update({
@@ -169,8 +181,8 @@ export async function POST(request: NextRequest) {
               .eq("id", conversationId);
           }
 
-          // Si el cliente estaba en waiting_agent pero escribe pidiendo el bot o seleccionando opciones del menú
-          if (convStatus === "waiting_agent") {
+          // Si el cliente estaba en waiting_agent o human_takeover pero escribe pidiendo el bot o seleccionando opciones del menú
+          if (convStatus === "waiting_agent" || convStatus === "human_takeover") {
             const wantsBot = /^(bot|menu|menú|reiniciar|activar bot|volver|inicio|opciones|1|2|3|4)$/i.test(messageText.trim());
             if (wantsBot) {
               convStatus = "ai_active";
@@ -187,10 +199,120 @@ export async function POST(request: NextRequest) {
           }
 
           if (convStatus === "ai_active" && conversationId) {
-            // Buffer y Debounce Inteligente:
-            // Si el cliente envía varios mensajes seguidos, el temporizador se reinicia
-            // y el bot espera que deje de escribir para responder con un solo mensaje unificado.
-            scheduleAIResponse(conversationId, fromPhone, contactName);
+            // Buffer y Debounce Serverless Seguro:
+            // Esperamos 3.5 segundos dentro de la solicitud para que si el cliente envía varios mensajes
+            // seguidos, el bot los consolide y responda con un único mensaje unificado.
+            const DEBOUNCE_WAIT_MS = 3500;
+            console.log(`⏳ Esperando ${DEBOUNCE_WAIT_MS / 1000}s para ver si el cliente ${fromPhone} envía más mensajes...`);
+            await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_WAIT_MS));
+
+            // Consultar si ha entrado un mensaje más nuevo de este cliente después de este
+            if (currentMsgId) {
+              const { data: latestClientMsgs } = await supabase
+                .from("messages")
+                .select("id, created_at")
+                .eq("conversation_id", conversationId)
+                .eq("sender", "client")
+                .order("created_at", { ascending: false })
+                .limit(1);
+
+              const latestId = latestClientMsgs?.[0]?.id;
+              if (latestId && latestId !== currentMsgId) {
+                console.log(`⏩ Mensaje posterior detectado (${latestId} vs ${currentMsgId}) para ${fromPhone}. Este webhook delega la respuesta al mensaje más reciente.`);
+                continue;
+              }
+            }
+
+            // Verificar si el estado de la conversación sigue siendo ai_active (por si intervino un asesor)
+            const { data: currentConv } = await supabase
+              .from("conversations")
+              .select("status")
+              .eq("id", conversationId)
+              .single();
+
+            if (currentConv && currentConv.status !== "ai_active") {
+              console.log(`⏸️ IA silenciada para ${fromPhone} (Estado actual: ${currentConv.status}).`);
+              continue;
+            }
+
+            // 1. Obtener historial reciente para memoria de la IA
+            const { data: historyMsgs } = await supabase
+              .from("messages")
+              .select("sender, content, created_at")
+              .eq("conversation_id", conversationId)
+              .order("created_at", { ascending: true })
+              .limit(20);
+
+            // 2. Identificar los mensajes del cliente acumulados desde la última respuesta del bot o asesor
+            let lastBotIdx = -1;
+            if (historyMsgs) {
+              for (let i = historyMsgs.length - 1; i >= 0; i--) {
+                if (historyMsgs[i].sender === "bot" || historyMsgs[i].sender === "agent") {
+                  lastBotIdx = i;
+                  break;
+                }
+              }
+            }
+
+            const unrepliedClientMsgs = (historyMsgs || [])
+              .slice(lastBotIdx + 1)
+              .filter((m) => m.sender === "client");
+
+            const combinedClientText = unrepliedClientMsgs.length > 0
+              ? unrepliedClientMsgs.map((m) => m.content.trim()).filter(Boolean).join("\n")
+              : messageText;
+
+            const priorHistory = (historyMsgs || []).slice(0, lastBotIdx + 1);
+
+            console.log(`🤖 Generando respuesta consolidada para ${fromPhone} (${unrepliedClientMsgs.length} mensaje(s)): "${combinedClientText.replace(/\n/g, " // ")}"`);
+
+            // 3. Generar respuesta con Gemini
+            const aiResult = await generateAIResponse(
+              priorHistory as any,
+              combinedClientText
+            );
+            console.log(`🤖 Respuesta IA generada: "${aiResult.replyText.slice(0, 80)}..." | Handoff: ${aiResult.requestHandoff}`);
+
+            // 4. Enviar respuesta por WhatsApp
+            const waResult = await sendWhatsAppMessage(fromPhone, aiResult.replyText);
+            if (!waResult.success) {
+              console.error("❌ Error enviando mensaje a WhatsApp:", JSON.stringify(waResult.error));
+            } else {
+              console.log(`✅ Mensaje enviado a WhatsApp para ${fromPhone}`);
+            }
+
+            // 5. Guardar respuesta del bot en Supabase
+            await supabase.from("messages").insert({
+              conversation_id: conversationId,
+              sender: "bot",
+              content: aiResult.replyText,
+            });
+
+            // 6. Si la IA detecta que el cliente necesita un asesor humano (Handoff)
+            if (aiResult.requestHandoff) {
+              await supabase
+                .from("conversations")
+                .update({
+                  status: "waiting_agent",
+                  last_message_preview: aiResult.replyText,
+                  last_message_at: new Date().toISOString(),
+                })
+                .eq("id", conversationId);
+
+              await supabase.from("messages").insert({
+                conversation_id: conversationId,
+                sender: "system",
+                content: `La IA detectó intención de asesor: ${aiResult.handoffReason || "Lead calificado"}. Conversación marcada como 'Esperando Asesor'.`,
+              });
+            } else {
+              await supabase
+                .from("conversations")
+                .update({
+                  last_message_preview: aiResult.replyText,
+                  last_message_at: new Date().toISOString(),
+                })
+                .eq("id", conversationId);
+            }
           } else {
             console.log(`⏸️ IA silenciada para ${fromPhone} (Estado: ${convStatus}). El asesor responderá.`);
           }
