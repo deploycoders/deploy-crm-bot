@@ -17,7 +17,7 @@ export default function RootLayout({
       <body className="bg-ink text-slate-100 antialiased selection:bg-signal/20 selection:text-signal">
         <div className="min-h-screen lg:flex">
           <Sidebar />
-          <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
+          <main className="min-w-0 flex-1 px-2 py-2 sm:px-6 sm:py-5 lg:px-8 lg:py-8">
             {children}
           </main>
         </div>
