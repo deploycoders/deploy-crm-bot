@@ -67,14 +67,19 @@ export default function ChatPage() {
   // Notas del asesor por contacto (guardadas en localStorage)
   const [advisorNotes, setAdvisorNotes] = useState<Record<string, string>>({});
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const activeConversation = conversations.find((c) => c.id === selectedId);
 
-  // Auto-scroll al último mensaje
+  // Auto-scroll al último mensaje dentro del contenedor exclusivo de mensajes (sin desplazar la ventana)
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
-    messagesEndRef.current?.scrollIntoView({ behavior });
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({
+        top: messagesContainerRef.current.scrollHeight,
+        behavior,
+      });
+    }
   };
 
   useEffect(() => {
@@ -355,16 +360,16 @@ export default function ChatPage() {
   const waitingCount = conversations.filter((c) => c.status === "waiting_agent").length;
 
   return (
-    <div className="mx-auto flex h-[calc(100dvh-5.5rem)] sm:h-[calc(100dvh-6.5rem)] lg:h-[calc(100vh-4rem)] max-w-7xl flex-col overflow-hidden rounded-xl border border-line bg-panel/85 shadow-2xl backdrop-blur-xl">
-      {/* Contenedor Principal: En móvil conmuta entre Lista y Chat */}
-      <div className="relative flex flex-1 overflow-hidden lg:grid lg:grid-cols-[340px_minmax(0,1fr)_320px]">
+    <div className="mx-auto flex h-[calc(100dvh-5rem)] md:h-full w-full max-w-7xl flex-col overflow-hidden rounded-xl border border-line bg-panel/85 shadow-2xl backdrop-blur-xl">
+      {/* Contenedor Principal: En tablet y desktop (md+) muestra lista y chat lado a lado. En móvil conmuta entre lista y chat */}
+      <div className="relative flex flex-1 overflow-hidden w-full">
         {/* ============================================================== */}
         {/* COLUMNA 1: LISTA DE CONVERSACIONES                              */}
         {/* ============================================================== */}
         <aside
-          className={`flex h-full w-full flex-col border-line bg-panel/95 lg:border-r ${
+          className={`h-full w-full md:w-80 lg:w-96 shrink-0 flex-col border-line bg-panel/95 md:border-r ${
             mobileView === "list" ? "flex" : "hidden"
-          } lg:flex`}
+          } md:flex`}
         >
           {/* Header de la Lista */}
           <div className="border-b border-line p-3 sm:p-4 space-y-3">
@@ -534,19 +539,19 @@ export default function ChatPage() {
         {/* COLUMNA 2: CHAT ACTIVO                                         */}
         {/* ============================================================== */}
         <section
-          className={`flex h-full w-full flex-col bg-ink/40 lg:border-r border-line ${
+          className={`flex-1 min-w-0 h-full flex-col bg-ink/40 xl:border-r border-line ${
             mobileView === "chat" ? "flex" : "hidden"
-          } lg:flex`}
+          } md:flex`}
         >
           {activeConversation ? (
             <>
               {/* Encabezado del Chat */}
-              <div className="flex items-center justify-between border-b border-line bg-panel/90 px-3 py-2.5 sm:px-4 sm:py-3 z-10">
+              <div className="flex items-center justify-between border-b border-line bg-panel/90 px-3 py-2.5 sm:px-4 sm:py-3 z-10 shrink-0">
                 <div className="flex min-w-0 items-center gap-2 sm:gap-3">
                   {/* Botón Volver (solo en móvil) */}
                   <button
                     onClick={() => setMobileView("list")}
-                    className="grid size-9 place-items-center rounded-lg border border-line bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 lg:hidden transition active:scale-95 shrink-0"
+                    className="grid size-9 place-items-center rounded-lg border border-line bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 md:hidden transition active:scale-95 shrink-0"
                     aria-label="Volver a la lista de chats"
                   >
                     <ArrowLeft className="size-4" />
@@ -602,10 +607,10 @@ export default function ChatPage() {
                     )}
                   </button>
 
-                  {/* Botón Info (abre Drawer en móvil) */}
+                  {/* Botón Info (abre Drawer en pantallas sin Columna 3) */}
                   <button
                     onClick={() => setShowMobileDetails(true)}
-                    className="grid size-8 sm:size-9 place-items-center rounded-lg border border-line bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 lg:hidden transition active:scale-95"
+                    className="grid size-8 sm:size-9 place-items-center rounded-lg border border-line bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 xl:hidden transition active:scale-95"
                     aria-label="Ver detalles del contacto"
                   >
                     <Info className="size-4" />
@@ -613,8 +618,11 @@ export default function ChatPage() {
                 </div>
               </div>
 
-              {/* Contenedor de Mensajes */}
-              <div className="flex-1 space-y-3.5 overflow-y-auto overscroll-contain p-3 sm:p-4">
+              {/* Contenedor de Mensajes con Scroll Aislado */}
+              <div
+                ref={messagesContainerRef}
+                className="flex-1 space-y-3.5 overflow-y-auto overscroll-contain p-3 sm:p-4 min-h-0"
+              >
                 {messages.length === 0 ? (
                   <div className="grid h-full place-items-center text-center text-slate-500 text-xs sm:text-sm">
                     <div>
@@ -681,11 +689,10 @@ export default function ChatPage() {
                     );
                   })
                 )}
-                <div ref={messagesEndRef} />
               </div>
 
               {/* Barra de Entrada Pinned al fondo */}
-              <div className="border-t border-line bg-panel/95 p-2.5 sm:p-3">
+              <div className="border-t border-line bg-panel/95 p-2.5 sm:p-3 shrink-0">
                 {activeConversation.status === "ai_active" && (
                   <p className="mb-1.5 px-1 text-[11px] text-amber-300/90 flex items-center gap-1.5">
                     <span className="size-1.5 rounded-full bg-amber-400" />
@@ -738,9 +745,9 @@ export default function ChatPage() {
         </section>
 
         {/* ============================================================== */}
-        {/* COLUMNA 3 (Desktop): INFORMACIÓN DEL LEAD                       */}
+        {/* COLUMNA 3 (Desktop Amplio): INFORMACIÓN DEL LEAD                */}
         {/* ============================================================== */}
-        <aside className="hidden h-full flex-col overflow-y-auto border-line bg-panel/75 p-5 lg:flex">
+        <aside className="hidden h-full w-72 shrink-0 flex-col overflow-y-auto border-line bg-panel/75 p-5 xl:flex">
           {activeConversation ? (
             <div className="space-y-4">
               <div className="rounded-xl border border-line bg-white/[0.04] p-4">

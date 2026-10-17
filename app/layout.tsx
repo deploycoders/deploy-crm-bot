@@ -17,9 +17,9 @@ export default function RootLayout({
     <html lang="es">
       <body className="bg-ink text-slate-100 antialiased selection:bg-signal/20 selection:text-signal">
         <GlobalNotifications />
-        <div className="min-h-screen lg:flex">
+        <div className="min-h-screen lg:h-screen lg:overflow-hidden lg:flex">
           <Sidebar />
-          <main className="min-w-0 flex-1 px-2 py-2 sm:px-6 sm:py-5 lg:px-8 lg:py-8">
+          <main className="min-w-0 flex-1 h-full overflow-y-auto px-2 py-2 sm:px-4 sm:py-3 lg:px-6 lg:py-4">
             {children}
           </main>
         </div>
