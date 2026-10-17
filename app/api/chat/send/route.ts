@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { sendWhatsAppMessage } from "@/lib/whatsapp";
+import { cancelPendingDebounce } from "@/lib/debounce";
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,6 +13,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Cancelar cualquier respuesta pendiente del bot para no interrumpir al asesor humano
+    cancelPendingDebounce(conversationId);
 
     const supabase = getSupabaseAdmin();
 

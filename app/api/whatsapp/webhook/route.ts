@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { generateAIResponse } from "@/lib/ai";
-import { sendWhatsAppMessage } from "@/lib/whatsapp";
+import { scheduleAIResponse } from "@/lib/debounce";
 
 // 1. Verificación del Webhook por parte de Meta (GET)
 export async function GET(request: NextRequest) {
@@ -172,7 +171,7 @@ export async function POST(request: NextRequest) {
 
           // Si el cliente estaba en waiting_agent pero escribe pidiendo el bot o seleccionando opciones del menú
           if (convStatus === "waiting_agent") {
-            const wantsBot = /^(bot|menu|menú|reiniciar|activar bot|volver|1|2|3)$/i.test(messageText.trim());
+            const wantsBot = /^(bot|menu|menú|reiniciar|activar bot|volver|inicio|opciones|1|2|3|4)$/i.test(messageText.trim());
             if (wantsBot) {
               convStatus = "ai_active";
               await supabase
@@ -187,62 +186,11 @@ export async function POST(request: NextRequest) {
             }
           }
 
-          if (convStatus === "ai_active") {
-            // 1. Obtener historial reciente para memoria
-            const { data: history } = await supabase
-              .from("messages")
-              .select("sender, content")
-              .eq("conversation_id", conversationId)
-              .order("created_at", { ascending: true })
-              .limit(10);
-
-            // 2. Generar respuesta con Gemini
-            const aiResult = await generateAIResponse(
-              (history || []) as any,
-              messageText
-            );
-            console.log(`🤖 Respuesta IA generada: "${aiResult.replyText}" | Handoff: ${aiResult.requestHandoff}`);
-
-            // 3. Enviar respuesta por WhatsApp
-            const waResult = await sendWhatsAppMessage(fromPhone, aiResult.replyText);
-            if (!waResult.success) {
-              console.error("❌ Error enviando mensaje a WhatsApp:", JSON.stringify(waResult.error));
-            } else {
-              console.log(`✅ Mensaje enviado a WhatsApp para ${fromPhone}`);
-            }
-
-            // 4. Guardar respuesta del bot en Supabase
-            await supabase.from("messages").insert({
-              conversation_id: conversationId,
-              sender: "bot",
-              content: aiResult.replyText,
-            });
-
-            // 5. Si la IA detecta que el cliente necesita un asesor humano (Handoff)
-            if (aiResult.requestHandoff) {
-              await supabase
-                .from("conversations")
-                .update({
-                  status: "waiting_agent",
-                  last_message_preview: aiResult.replyText,
-                  last_message_at: new Date().toISOString(),
-                })
-                .eq("id", conversationId);
-
-              await supabase.from("messages").insert({
-                conversation_id: conversationId,
-                sender: "system",
-                content: `La IA detectó intención de asesor: ${aiResult.handoffReason || "Lead calificado"}. Conversación marcada como 'Esperando Asesor'.`,
-              });
-            } else {
-              await supabase
-                .from("conversations")
-                .update({
-                  last_message_preview: aiResult.replyText,
-                  last_message_at: new Date().toISOString(),
-                })
-                .eq("id", conversationId);
-            }
+          if (convStatus === "ai_active" && conversationId) {
+            // Buffer y Debounce Inteligente:
+            // Si el cliente envía varios mensajes seguidos, el temporizador se reinicia
+            // y el bot espera que deje de escribir para responder con un solo mensaje unificado.
+            scheduleAIResponse(conversationId, fromPhone, contactName);
           } else {
             console.log(`⏸️ IA silenciada para ${fromPhone} (Estado: ${convStatus}). El asesor responderá.`);
           }

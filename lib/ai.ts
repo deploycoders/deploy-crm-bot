@@ -23,11 +23,22 @@ Tu objetivo es brindar soporte, información y atención al cliente de forma ami
 - **Idioma:** Español.
 
 # Menú de Opciones y Servicios
-Cuando un usuario salude por primera vez o solicite opciones/ayuda general, dale una bienvenida amigable y preséntale el menú principal:
+El menú principal de Deploy consta de 4 opciones:
 1️⃣ *Preguntas Frecuentes (FAQ):* Tiempos de entrega, modalidades de pago, contratación y procesos.
 2️⃣ *Información de Productos y Servicios:* Sitios web, landing pages, sistemas a medida, automatizaciones (n8n/AppSheet) e infraestructura Cloud.
 3️⃣ *Soporte y Solución de Problemas (Troubleshooting):* Diagnóstico inicial y asistencia para resolver incidencias técnicas en sistemas o servicios activos.
 4️⃣ *Hablar con un Asesor Humano:* Conexión directa con nuestro equipo de especialistas.
+
+# REGLA OBLIGATORIA: MANTENER EL MENÚ EN LA CONVERSACIÓN Y RESPONDER EN UN SOLO MENSAJE
+- **Respuestas Consolidadas a Múltiples Mensajes:** Cuando el cliente envíe varios mensajes seguidos (por ejemplo: un saludo, una duda sobre precios y una pregunta de servicios), consolida TODO en UN SOLO MENSAJE. Saluda cordialmente, responde con detalle a cada una de sus preguntas y mantén el menú presente al final.
+- **Mantener el Menú Activo:** El cliente siempre debe tener a la mano el menú para continuar la navegación. 
+  - Si saluda o pide opciones: Dale una bienvenida cálida y preséntale el menú principal completo de 4 opciones.
+  - Si responde a una opción o hace preguntas específicas: Responde de forma completa, y al final incluye SIEMPRE una guía o pie amigable recordando las opciones del menú (por ejemplo:
+    "📌 *Menú de Opciones:*
+    1️⃣ FAQ | 2️⃣ Servicios | 3️⃣ Soporte | 4️⃣ Asesor
+    *(Escribe el número de la opción o 'Menú' en cualquier momento)*").
+  - Si el usuario escribe "menú", "menu", "opciones", "volver", "inicio" o selecciona un número (1, 2, 3 o 4): responde mostrando el menú o atendiendo inmediatamente la opción correspondiente.
+  - Nunca dejes la conversación en un callejón sin salida; el menú siempre debe mantenerse disponible.
 
 # Contexto del Negocio y Servicios
 - **Nombre:** Deploy.
@@ -139,15 +150,18 @@ export async function generateAIResponse(
 Historial de la conversación reciente:
 ${formattedHistory}
 
-Último mensaje recibido del cliente:
+Mensaje(s) reciente(s) recibido(s) del cliente (pueden ser varios acumulados):
 "${newMessage}"
 
-Genera la respuesta en el formato JSON indicado.`;
+INSTRUCCIONES CLAVE PARA ESTA RESPUESTA:
+1. Responde a TODAS las preguntas o temas mencionados por el cliente en UN SOLO MENSAJE completo y bien estructurado.
+2. MANTÉN EL MENÚ EN LA CONVERSACIÓN: incluye o recapitula al final las opciones del menú principal (1️⃣ FAQ, 2️⃣ Servicios, 3️⃣ Soporte, 4️⃣ Asesor) o un pie claro para que el cliente continúe interactuando.
+3. Genera la respuesta en el formato JSON indicado.`;
 
     const text = await callGeminiWithFallback(prompt);
     
     // Parseo resiliente del JSON devuelto por el modelo
-    let replyText = "¡Hola! Bienvenido a Deploy. ¿En qué te podemos colaborar hoy?";
+    let replyText = "¡Hola! Bienvenido a Deploy 🚀\n\n¿En qué te podemos colaborar hoy?\n\n📌 *Menú Principal:*\n1️⃣ Preguntas Frecuentes (FAQ)\n2️⃣ Servicios y Soluciones Web\n3️⃣ Soporte Técnico\n4️⃣ Hablar con un Asesor";
     let requestHandoff = false;
     let handoffReason: string | undefined = undefined;
 
@@ -176,7 +190,7 @@ Genera la respuesta en el formato JSON indicado.`;
   } catch (error) {
     console.error("Error al generar respuesta con Gemini (todos los modelos fallaron):", error);
     return {
-      replyText: "¡Hola! 👋 Bienvenido a Deploy. ¿En qué servicio o consulta tecnológica te podemos ayudar hoy? (Desarrollo web, landing pages, automatizaciones n8n o soporte técnico). 🚀",
+      replyText: "¡Hola! 👋 Bienvenido a Deploy. ¿En qué servicio o consulta tecnológica te podemos ayudar hoy?\n\n📌 *Menú de Opciones:*\n1️⃣ *FAQ:* Preguntas frecuentes y formas de pago\n2️⃣ *Servicios:* Desarrollo web, landing pages y n8n\n3️⃣ *Soporte:* Incidencias y diagnóstico técnico\n4️⃣ *Asesor:* Conectar con un especialista\n\n*(Escribe el número de la opción o 'Menú')* 🚀",
       requestHandoff: false,
       handoffReason: undefined,
     };
