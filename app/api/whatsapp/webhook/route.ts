@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { generateAIResponse, cleanJsonArtifacts } from "@/lib/ai";
-import { sendWhatsAppMessage } from "@/lib/whatsapp";
+import {
+  generateAIResponse,
+  cleanJsonArtifacts,
+  transcribeAudioWithGemini,
+  generateHandoffSummary,
+} from "@/lib/ai";
+import { sendWhatsAppMessage, downloadWhatsAppMedia } from "@/lib/whatsapp";
 
 // 1. Verificación del Webhook por parte de Meta (GET)
 export async function GET(request: NextRequest) {
@@ -74,10 +79,26 @@ export async function POST(request: NextRequest) {
 
           if (msg.type === "text") {
             messageText = msg.text.body;
-          } else if (msg.type === "audio") {
-            messageText = "[Nota de voz recibida]";
+          } else if (msg.type === "audio" || msg.type === "voice") {
+            const mediaId = msg.audio?.id || msg.voice?.id;
+            if (mediaId) {
+              console.log(`🎙️ Descargando y transcribiendo nota de voz de ${fromPhone} (Media ID: ${mediaId})...`);
+              const downloaded = await downloadWhatsAppMedia(mediaId);
+              if (downloaded) {
+                const transcription = await transcribeAudioWithGemini(
+                  downloaded.buffer,
+                  downloaded.mimeType
+                );
+                messageText = `🎤 [Nota de voz]: "${transcription}"`;
+                console.log(`✅ Nota de voz transcrita para ${fromPhone}: "${transcription}"`);
+              } else {
+                messageText = "🎤 [Nota de voz recibida]";
+              }
+            } else {
+              messageText = "🎤 [Nota de voz recibida]";
+            }
           } else if (msg.type === "image") {
-            messageText = msg.image?.caption || "[Imagen recibida]";
+            messageText = msg.image?.caption ? `📷 [Imagen]: ${msg.image.caption}` : "📷 [Imagen recibida]";
           } else {
             messageText = `[Mensaje de tipo ${msg.type}]`;
           }
@@ -291,6 +312,13 @@ export async function POST(request: NextRequest) {
 
             // 6. Si la IA detecta que el cliente necesita un asesor humano (Handoff)
             if (aiResult.requestHandoff) {
+              console.log(`📋 Generando Ficha Ejecutiva de Transferencia con IA para ${fromPhone}...`);
+              const handoffSummary = await generateHandoffSummary(
+                (historyMsgs || []) as any,
+                combinedClientText,
+                aiResult.handoffReason
+              );
+
               await supabase
                 .from("conversations")
                 .update({
@@ -300,10 +328,20 @@ export async function POST(request: NextRequest) {
                 })
                 .eq("id", conversationId);
 
+              // Guardar la tarjeta ejecutiva estructurada para el asesor
+              const summaryCardContent = JSON.stringify({
+                type: "handoff_summary_card",
+                executiveSummary: handoffSummary.executiveSummary,
+                clientInterest: handoffSummary.clientInterest,
+                urgencyLevel: handoffSummary.urgencyLevel,
+                recommendedAction: handoffSummary.recommendedAction,
+                reason: aiResult.handoffReason || "Lead Calificado",
+              });
+
               await supabase.from("messages").insert({
                 conversation_id: conversationId,
                 sender: "system",
-                content: `La IA detectó intención de asesor: ${aiResult.handoffReason || "Lead calificado"}. Conversación marcada como 'Esperando Asesor'.`,
+                content: summaryCardContent,
               });
             } else {
               await supabase

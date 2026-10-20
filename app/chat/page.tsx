@@ -18,6 +18,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Sparkles,
   UserRound,
   X,
   Zap,
@@ -698,6 +699,74 @@ export default function ChatPage() {
                       const isBot = message.sender === "bot";
 
                       if (isSystem) {
+                        let handoffCardData: any = null;
+                        try {
+                          if (message.content.startsWith("{") && message.content.includes("handoff_summary_card")) {
+                            handoffCardData = JSON.parse(message.content);
+                          }
+                        } catch {}
+
+                        if (handoffCardData) {
+                          const urgencyBadge = {
+                            alta: "bg-rose-500/20 border-rose-500/40 text-rose-300",
+                            media: "bg-amber-500/20 border-amber-500/40 text-amber-300",
+                            baja: "bg-sky-500/20 border-sky-500/40 text-sky-300",
+                          }[handoffCardData.urgencyLevel as "alta" | "media" | "baja"] || "bg-amber-500/20 border-amber-500/40 text-amber-300";
+
+                          return (
+                            <div key={message.id} className="flex justify-center my-3 px-2">
+                              <div className="w-full max-w-xl rounded-xl border border-amber-400/40 bg-gradient-to-br from-amber-500/15 via-panel to-panel p-4 shadow-2xl backdrop-blur-md space-y-2.5">
+                                <div className="flex items-center justify-between border-b border-amber-400/20 pb-2.5">
+                                  <div className="flex items-center gap-2">
+                                    <span className="grid size-7 place-items-center rounded-lg bg-amber-400/20 text-amber-400 border border-amber-400/30">
+                                      <Sparkles className="size-4" />
+                                    </span>
+                                    <div>
+                                      <h4 className="text-xs font-bold uppercase tracking-wider text-amber-300">
+                                        Ficha Ejecutiva de Transferencia (IA)
+                                      </h4>
+                                      <p className="text-[10px] text-slate-400">
+                                        Análisis automático previo a la intervención humana
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase ${urgencyBadge}`}>
+                                    Urgencia {handoffCardData.urgencyLevel || "Media"}
+                                  </span>
+                                </div>
+
+                                <div className="space-y-2 text-xs text-slate-200">
+                                  <div className="rounded-lg bg-ink/60 p-2.5 border border-line">
+                                    <p className="text-[11px] font-medium text-slate-400 uppercase tracking-wide">Resumen del Lead</p>
+                                    <p className="text-xs text-slate-100 mt-0.5 leading-relaxed">
+                                      {handoffCardData.executiveSummary}
+                                    </p>
+                                  </div>
+
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                                    <div className="rounded-lg bg-ink/40 p-2 border border-line">
+                                      <span className="text-slate-400">Interés:</span>{" "}
+                                      <span className="text-amber-200 font-medium">{handoffCardData.clientInterest}</span>
+                                    </div>
+                                    <div className="rounded-lg bg-ink/40 p-2 border border-line">
+                                      <span className="text-slate-400">Motivo:</span>{" "}
+                                      <span className="text-slate-300 font-medium">{handoffCardData.reason}</span>
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-2.5 text-[11px] text-amber-200 flex items-start gap-2">
+                                    <Zap className="size-4 text-amber-400 shrink-0 mt-0.5" />
+                                    <div>
+                                      <span className="font-bold text-amber-300">Acción sugerida para el Asesor:</span>
+                                      <p className="mt-0.5 text-slate-200">{handoffCardData.recommendedAction}</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
+
                         return (
                           <div key={message.id} className="flex justify-center my-2">
                             <div className="max-w-[90%] rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-1.5 text-center text-[11px] sm:text-xs text-amber-200 shadow-sm leading-relaxed">

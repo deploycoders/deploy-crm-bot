@@ -42,3 +42,65 @@ export async function sendWhatsAppMessage(toPhone: string, text: string) {
     return { success: false, error };
   }
 }
+
+/**
+ * Descarga archivos binarios (notas de voz, audios, imágenes) desde WhatsApp Cloud API
+ */
+export async function downloadWhatsAppMedia(
+  mediaId: string
+): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+
+  if (!token) {
+    console.error("Falta variable de entorno: WHATSAPP_ACCESS_TOKEN para descargar media");
+    return null;
+  }
+
+  try {
+    // 1. Obtener la URL de descarga temporal desde Graph API
+    const metaRes = await fetch(`https://graph.facebook.com/v22.0/${mediaId}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!metaRes.ok) {
+      console.error("Error al consultar media ID en WhatsApp:", await metaRes.text());
+      return null;
+    }
+
+    const metaData = await metaRes.json();
+    const downloadUrl = metaData.url;
+    const mimeType = metaData.mime_type || "audio/ogg";
+
+    if (!downloadUrl) {
+      console.error("WhatsApp no retornó downloadUrl para media ID:", mediaId);
+      return null;
+    }
+
+    // 2. Descargar el archivo binario usando el token Bearer
+    const fileRes = await fetch(downloadUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "User-Agent": "SalesBot-CRM/1.0",
+      },
+    });
+
+    if (!fileRes.ok) {
+      console.error("Error descargando binario de media:", await fileRes.text());
+      return null;
+    }
+
+    const arrayBuffer = await fileRes.arrayBuffer();
+    return {
+      buffer: Buffer.from(arrayBuffer),
+      mimeType,
+    };
+  } catch (error) {
+    console.error("Excepción descargando media de WhatsApp:", error);
+    return null;
+  }
+}
+

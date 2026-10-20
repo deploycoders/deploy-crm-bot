@@ -1,10 +1,11 @@
 import { GoogleGenAI } from "@google/genai";
+import { getActiveBotConfig, buildDynamicSystemPrompt } from "./botConfig";
 
 const apiKey = process.env.GEMINI_API_KEY || "";
 
 const ai = new GoogleGenAI({ apiKey });
 
-interface ConversationMessage {
+export interface ConversationMessage {
   sender: "client" | "bot" | "agent" | "system";
   content: string;
 }
@@ -15,60 +16,14 @@ export interface AIResponse {
   handoffReason?: string;
 }
 
-const SYSTEM_PROMPT = `
-# Rol y Personalidad
-Eres **Antigravity**, el asistente virtual oficial de **Deploy**, empresa de desarrollo de software y soluciones tecnológicas.
-Tu objetivo es brindar soporte, información y atención al cliente de forma amigable, profesional, rápida y concisa por WhatsApp.
-- **Tono:** Cálido, servicial, conciso y directo (ideal para lectura rápida en WhatsApp móvil, usando viñetas claras y emojis con moderación 🚀💼).
-- **Idioma:** Español.
-
-# Menú de Opciones y Servicios (Selección por Número)
-Cuando el usuario escriba un número (1, 2, 3 o 4) o una consulta directa relacionada, responde EXCLUSIVAMENTE basándote en estas opciones:
-1️⃣ *Preguntas Frecuentes (FAQ):* Modalidades de trabajo, procesos y políticas generales de atención. (Nota: Las tarifas y cotizaciones no se dan de forma general; las gestiona un asesor para brindar una atención personalizada).
-2️⃣ *Información de Productos y Servicios:* Sitios web, landing pages, sistemas a medida, chatbots, bots, automatizaciones de procesos (AppSheet/scripts) e infraestructura Cloud que ofrece Deploy.
-3️⃣ *Soporte y Solución de Problemas (Troubleshooting):* Diagnóstico inicial y asistencia exclusiva para resolver incidencias técnicas en sistemas o servicios activos de Deploy.
-4️⃣ *Hablar con un Asesor Humano:* Conexión directa con nuestro equipo de especialistas para cotizaciones detalladas y atención personalizada.
-
-# REGLA OBLIGATORIA: ESTRICTO ALCANCE DE DEPLOY (CERO FUERA DE CONTEXTO)
-- **Ámbito Exclusivo:** Responde ÚNICAMENTE sobre los servicios, productos y soporte de Deploy.
-- **Prohibido Código y Tutoriales:** NO escribas código de programación, NO des tutoriales de "cómo hacer" cosas técnicas, NO resuelvas tareas escolares, NO respondas preguntas de cultura general, trivia ni datos curiosos (estilo Wikipedia). Si intentan sacarte de contexto o pedirte ayuda de programación genérica, responde cortésmente que tu función se limita exclusivamente a los servicios y soluciones de la agencia Deploy y reorienta al menú.
-
-# Contexto del Negocio y Servicios
-- **Nombre:** Deploy.
-- **Ubicación:** No menciones la ubicación exacta de la empresa en el chat; aclara siempre que esa información o detalles de presencialidad los coordina directamente el asesor en caso de ser necesario.
-- **Horarios:** Atención todos los días.
-- **Servicios:**
-  1. *Desarrollo Web y Landing Pages:* Next.js, React, Node.js, landing pages de alta conversión, plataformas a medida y PWA.
-  2. *Chatbots, Bots y Automatizaciones:* Creación de chatbots inteligentes, bots interactivos, automatización de procesos de negocio, AppSheet, integraciones vía APIs y bases de datos.
-  3. *Infraestructura y Cloud:* Despliegues en Vercel, Supabase, Railway, Cloudflare y GitHub.
-  4. *Soporte Técnico y Mantenimiento:* Soporte de software y hardware preventivo/correctivo para sistemas de la agencia.
-- **Formas de Pago:** Pago Móvil, transferencias bancarias nacionales, Binance Pay / USDT y divisas en efectivo.
-
-# Política de Precios y Cotizaciones
-- **Atención Personalizada:** El bot NUNCA debe dar precios fijos, tarifas cerradas ni cotizaciones automáticas. Cada proyecto requiere un análisis a la medida. Siempre debes indicar que los presupuestos y cotizaciones los entrega directamente un asesor humano para garantizar una atención personalizada, guiando al usuario a la opción 4 (Asesor) o activando la transferencia.
-
-# Troubleshooting (Soporte Técnico)
-Si el usuario reporta una falla o problema técnico con un sistema o servicio activo de Deploy:
-- Pide detalles breves del error.
-- Brinda diagnóstico y pasos recomendados para solucionarlo.
-- NO transfieras a un asesor por soporte técnico a menos que el cliente lo pida expresamente.
-
-# REGLA FUNDAMENTAL DE ATENCIÓN Y TRANSFERENCIA A ASESOR (HANDOFF)
-El bot DEBE ATENDER Y RESOLVER SIEMPRE las dudas generales sobre qué hace Deploy dentro de su alcance.
-**SOLO se debe transferir a un asesor humano ("requestHandoff": true) en EXACTAMENTE DOS CASOS:**
-1. **El cliente lo elige o pide explícitamente en el chat:** El usuario selecciona la opción 4, o escribe claramente que quiere hablar con un asesor o persona humana (ej: "quiero hablar con un asesor", "pásame con un humano", "asesor", "opción 4").
-2. **Solicitud de Cotización, Precios o Contratación:** Como los precios, presupuestos y cotizaciones los maneja exclusivamente el asesor para una atención personalizada, si el cliente pide precios, costos o desea contratar un servicio, indícale amablemente que un asesor le atenderá de forma personalizada y activa el handoff ("requestHandoff": true).
-
-# FORMATO DE RESPUESTA OBLIGATORIO
-Debes responder SIEMPRE en formato JSON estricto con las siguientes claves:
-{
-  "replyText": "El mensaje que se le enviará al cliente por WhatsApp",
-  "requestHandoff": true o false,
-  "handoffReason": "Razón de la transferencia (o null si es false)"
+export interface HandoffSummary {
+  executiveSummary: string;
+  clientInterest: string;
+  urgencyLevel: "alta" | "media" | "baja";
+  recommendedAction: string;
 }
-`;
 
-// Modelos en orden de velocidad, disponibilidad y estabilidad (Sin tocar)
+// Modelos en orden de velocidad, disponibilidad y estabilidad
 const GEMINI_MODELS = [
   "gemini-3.1-flash-lite", // Máxima velocidad (<1s) y alta disponibilidad
   "gemini-3.8-flash",      // Modelo avanzado recomendado
@@ -85,8 +40,10 @@ async function callWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promi
   ]);
 }
 
-async function callGeminiWithFallback(prompt: string): Promise<string> {
+async function callGeminiWithFallback(prompt: string, systemInstruction?: string): Promise<string> {
   let lastError: unknown;
+  const config = await getActiveBotConfig();
+  const instruction = systemInstruction || buildDynamicSystemPrompt(config);
 
   for (const model of GEMINI_MODELS) {
     try {
@@ -96,7 +53,7 @@ async function callGeminiWithFallback(prompt: string): Promise<string> {
           model,
           contents: prompt,
           config: {
-            systemInstruction: SYSTEM_PROMPT,
+            systemInstruction: instruction,
             responseMimeType: "application/json",
             temperature: 0.3,
           },
@@ -114,6 +71,116 @@ async function callGeminiWithFallback(prompt: string): Promise<string> {
   }
 
   throw lastError;
+}
+
+/**
+ * Transcribe un audio o nota de voz de WhatsApp usando Google Gemini
+ */
+export async function transcribeAudioWithGemini(
+  audioBuffer: Buffer,
+  mimeType: string
+): Promise<string> {
+  if (!apiKey) {
+    return "Nota de voz recibida (Gemini API key no configurada)";
+  }
+
+  try {
+    const cleanMime = mimeType.split(";")[0].trim() || "audio/ogg";
+
+    const response = await callWithTimeout(
+      ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: [
+          {
+            inlineData: {
+              data: audioBuffer.toString("base64"),
+              mimeType: cleanMime,
+            },
+          },
+          {
+            text:
+              "Transcribe en español el contenido hablado en este audio o nota de voz de WhatsApp. " +
+              "Si el audio es inaudible o contiene solo ruido, indica brevemente lo que se logre captar. " +
+              "Devuelve ÚNICAMENTE el texto transcrito de forma limpia, sin saludos, sin explicaciones ni comillas.",
+          },
+        ],
+      }),
+      9000
+    );
+
+    const transcribed = response.text?.trim() || "";
+    return transcribed || "Nota de voz sin audio reconocible";
+  } catch (error) {
+    console.error("Error al transcribir audio con Gemini:", error);
+    return "Nota de voz recibida (no fue posible transcribir)";
+  }
+}
+
+/**
+ * Genera una Ficha Ejecutiva de Transferencia (Handoff) para el asesor humano
+ */
+export async function generateHandoffSummary(
+  history: ConversationMessage[],
+  clientMessage: string,
+  handoffReason?: string
+): Promise<HandoffSummary> {
+  const fallback: HandoffSummary = {
+    executiveSummary: "El cliente solicitó asesoría comercial o cotización personalizada.",
+    clientInterest: handoffReason || "Consulta de servicios y cotizaciones",
+    urgencyLevel: "media",
+    recommendedAction: "Saludar cordialmente, validar los requerimientos del proyecto y cotizar.",
+  };
+
+  if (!apiKey) return fallback;
+
+  try {
+    const formatted = history
+      .slice(-6)
+      .map((m) => `${m.sender === "client" ? "Cliente" : "Asistente"}: ${m.content}`)
+      .join("\n");
+
+    const prompt = `
+Historial reciente de la conversación:
+${formatted}
+
+Último mensaje recibido:
+"${clientMessage}"
+
+Razón o disparador de la transferencia:
+${handoffReason || "Atención personalizada o cotización"}
+
+Genera una ficha ejecutiva de transferencia para el asesor humano en formato JSON estricto con las siguientes claves:
+{
+  "executiveSummary": "Resumen conciso en 1 o 2 oraciones de lo que el cliente necesita y su contexto",
+  "clientInterest": "Servicio o tema principal de interés (ej: Desarrollo Web, Bot WhatsApp, etc.)",
+  "urgencyLevel": "alta" o "media" o "baja",
+  "recommendedAction": "Acción directa y concreta que el asesor humano debe realizar al intervenir"
+}`;
+
+    const raw = await callGeminiWithFallback(
+      prompt,
+      "Eres un analista de CRM senior de Deploy. Tu tarea es resumir con alta precisión el estado y necesidad del prospecto para el asesor humano en JSON estricto."
+    );
+
+    const cleaned = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
+    const firstBrace = cleaned.indexOf("{");
+    const lastBrace = cleaned.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      const parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
+      return {
+        executiveSummary: parsed.executiveSummary || fallback.executiveSummary,
+        clientInterest: parsed.clientInterest || fallback.clientInterest,
+        urgencyLevel: ["alta", "media", "baja"].includes(parsed.urgencyLevel)
+          ? parsed.urgencyLevel
+          : fallback.urgencyLevel,
+        recommendedAction: parsed.recommendedAction || fallback.recommendedAction,
+      };
+    }
+  } catch (error) {
+    console.error("Error al generar resumen ejecutivo de handoff:", error);
+  }
+
+  return fallback;
 }
 
 export async function generateAIResponse(
