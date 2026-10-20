@@ -2,9 +2,13 @@
 
 import { useEffect, useState, useRef, useMemo } from "react";
 import {
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   Bot,
   Check,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
   Info,
   MessageSquare,
@@ -19,6 +23,7 @@ import {
   Zap,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { cleanJsonArtifacts } from "@/lib/ai";
 
 interface Contact {
   id: string;
@@ -67,12 +72,27 @@ export default function ChatPage() {
   // Notas del asesor por contacto (guardadas en localStorage)
   const [advisorNotes, setAdvisorNotes] = useState<Record<string, string>>({});
 
+  // Control de scroll y visibilidad de botones
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const activeConversation = conversations.find((c) => c.id === selectedId);
 
-  // Auto-scroll al último mensaje dentro del contenedor exclusivo de mensajes (sin desplazar la ventana)
+  // Detectar la posición del scroll para mostrar botones de ayuda
+  const handleMessagesScroll = () => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // Si el usuario subió y está a más de 80px del fondo, mostrar botón para bajar
+    setShowScrollBottom(distanceToBottom > 80);
+    // Si ha bajado más de 250px del inicio, mostrar botón para subir
+    setShowScrollTop(el.scrollTop > 250);
+  };
+
+  // Scroll suave al fondo (donde están los mensajes recientes y el input)
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
     if (messagesContainerRef.current) {
       messagesContainerRef.current.scrollTo({
@@ -80,6 +100,24 @@ export default function ChatPage() {
         behavior,
       });
     }
+  };
+
+  // Scroll al comienzo del chat (primeros mensajes)
+  const scrollToTop = (behavior: ScrollBehavior = "smooth") => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({
+        top: 0,
+        behavior,
+      });
+    }
+  };
+
+  // Bajar al final y enfocar la caja de respuesta
+  const handleScrollToBottomAndFocus = () => {
+    scrollToBottom("smooth");
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 150);
   };
 
   useEffect(() => {
@@ -360,9 +398,10 @@ export default function ChatPage() {
   const waitingCount = conversations.filter((c) => c.status === "waiting_agent").length;
 
   return (
-    <div className="mx-auto flex h-[calc(100dvh-5rem)] md:h-full w-full max-w-7xl flex-col overflow-hidden rounded-xl border border-line bg-panel/85 shadow-2xl backdrop-blur-xl">
-      {/* Contenedor Principal: En tablet y desktop (md+) muestra lista y chat lado a lado. En móvil conmuta entre lista y chat */}
-      <div className="relative flex flex-1 overflow-hidden w-full">
+    <div className="h-[calc(100dvh-4rem)] p-2 sm:p-3 md:p-4 flex flex-col overflow-hidden">
+      <div className="mx-auto flex h-full w-full max-w-7xl flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel/85 shadow-2xl backdrop-blur-xl">
+        {/* Contenedor Principal: En tablet y desktop (md+) muestra lista y chat lado a lado. En móvil conmuta entre lista y chat */}
+        <div className="relative flex flex-1 overflow-hidden w-full">
         {/* ============================================================== */}
         {/* COLUMNA 1: LISTA DE CONVERSACIONES                              */}
         {/* ============================================================== */}
@@ -583,6 +622,26 @@ export default function ChatPage() {
 
                 {/* Acciones del Encabezado */}
                 <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                  {/* Botones de Navegación Rápida de Mensajes */}
+                  <div className="flex items-center rounded-lg border border-line bg-white/5 p-0.5">
+                    <button
+                      onClick={() => scrollToTop("smooth")}
+                      className="grid size-7 sm:size-8 place-items-center rounded-md text-slate-400 hover:text-white hover:bg-white/10 transition"
+                      title="Ir al comienzo del chat (primeros mensajes)"
+                      aria-label="Ir al comienzo del chat"
+                    >
+                      <ArrowUp className="size-3.5" />
+                    </button>
+                    <button
+                      onClick={handleScrollToBottomAndFocus}
+                      className="grid size-7 sm:size-8 place-items-center rounded-md text-slate-400 hover:text-white hover:bg-white/10 transition"
+                      title="Bajar al final del chat (escribir respuesta)"
+                      aria-label="Bajar al final del chat"
+                    >
+                      <ArrowDown className="size-3.5" />
+                    </button>
+                  </div>
+
                   {/* Botón Intervenir / Reactivar IA */}
                   <button
                     onClick={toggleStatus}
@@ -618,76 +677,109 @@ export default function ChatPage() {
                 </div>
               </div>
 
-              {/* Contenedor de Mensajes con Scroll Aislado */}
-              <div
-                ref={messagesContainerRef}
-                className="flex-1 space-y-3.5 overflow-y-auto overscroll-contain p-3 sm:p-4 min-h-0"
-              >
-                {messages.length === 0 ? (
-                  <div className="grid h-full place-items-center text-center text-slate-500 text-xs sm:text-sm">
-                    <div>
-                      <Bot className="size-8 mx-auto text-slate-600 mb-2" />
-                      Inicia la conversación o espera el primer mensaje del cliente.
+              {/* Contenedor de Mensajes con Scroll Aislado y Botones Flotantes */}
+              <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
+                <div
+                  ref={messagesContainerRef}
+                  onScroll={handleMessagesScroll}
+                  className="flex-1 space-y-3.5 overflow-y-auto overscroll-contain p-3 sm:p-4 min-h-0"
+                >
+                  {messages.length === 0 ? (
+                    <div className="grid h-full place-items-center text-center text-slate-500 text-xs sm:text-sm">
+                      <div>
+                        <Bot className="size-8 mx-auto text-slate-600 mb-2" />
+                        Inicia la conversación o espera el primer mensaje del cliente.
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  messages.map((message) => {
-                    const isAgent = message.sender === "agent";
-                    const isSystem = message.sender === "system";
-                    const isBot = message.sender === "bot";
+                  ) : (
+                    messages.map((message) => {
+                      const isAgent = message.sender === "agent";
+                      const isSystem = message.sender === "system";
+                      const isBot = message.sender === "bot";
 
-                    if (isSystem) {
+                      if (isSystem) {
+                        return (
+                          <div key={message.id} className="flex justify-center my-2">
+                            <div className="max-w-[90%] rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-1.5 text-center text-[11px] sm:text-xs text-amber-200 shadow-sm leading-relaxed">
+                              {message.content}
+                            </div>
+                          </div>
+                        );
+                      }
+
                       return (
-                        <div key={message.id} className="flex justify-center my-2">
-                          <div className="max-w-[90%] rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-1.5 text-center text-[11px] sm:text-xs text-amber-200 shadow-sm leading-relaxed">
-                            {message.content}
+                        <div
+                          key={message.id}
+                          className={`flex ${isAgent ? "justify-end" : "justify-start"}`}
+                        >
+                          <div
+                            className={`max-w-[85%] sm:max-w-[72%] rounded-2xl border px-3.5 py-2.5 sm:px-4 sm:py-3 text-xs sm:text-sm leading-relaxed shadow-md break-words ${
+                              isAgent
+                                ? "rounded-tr-xs border-sky-400/30 bg-sky-500/20 text-sky-50 shadow-sky-950/20"
+                                : isBot
+                                ? "rounded-tl-xs border-signal/25 bg-signal/12 text-emerald-50 shadow-emerald-950/20"
+                                : "rounded-tl-xs border-line bg-white/[0.08] text-slate-100 shadow-black/20"
+                            }`}
+                          >
+                            {/* Identificador del Emisor */}
+                            <div className="mb-1 flex items-center justify-between gap-3 text-[10px] sm:text-[11px] font-semibold text-slate-400">
+                              <span className="flex items-center gap-1">
+                                {isBot && <Bot className="size-3 text-signal" />}
+                                {isAgent && <UserRound className="size-3 text-sky-300" />}
+                                <span
+                                  className={
+                                    isBot
+                                      ? "text-signal"
+                                      : isAgent
+                                      ? "text-sky-300"
+                                      : "text-slate-300"
+                                  }
+                                >
+                                  {isBot ? "Bot IA" : isAgent ? "Tú (Asesor)" : "Cliente"}
+                                </span>
+                              </span>
+                              <span className="text-[10px] text-slate-500 font-normal">
+                                {formatMessageTime(message.created_at)}
+                              </span>
+                            </div>
+
+                            {/* Contenido del Mensaje limpio de artefactos JSON si los hubiera */}
+                            <p className="whitespace-pre-wrap">{cleanJsonArtifacts(message.content)}</p>
                           </div>
                         </div>
                       );
-                    }
+                    })
+                  )}
+                </div>
 
-                    return (
-                      <div
-                        key={message.id}
-                        className={`flex ${isAgent ? "justify-end" : "justify-start"}`}
-                      >
-                        <div
-                          className={`max-w-[85%] sm:max-w-[72%] rounded-2xl border px-3.5 py-2.5 sm:px-4 sm:py-3 text-xs sm:text-sm leading-relaxed shadow-md break-words ${
-                            isAgent
-                              ? "rounded-tr-xs border-sky-400/30 bg-sky-500/20 text-sky-50 shadow-sky-950/20"
-                              : isBot
-                              ? "rounded-tl-xs border-signal/25 bg-signal/12 text-emerald-50 shadow-emerald-950/20"
-                              : "rounded-tl-xs border-line bg-white/[0.08] text-slate-100 shadow-black/20"
-                          }`}
-                        >
-                          {/* Identificador del Emisor */}
-                          <div className="mb-1 flex items-center justify-between gap-3 text-[10px] sm:text-[11px] font-semibold text-slate-400">
-                            <span className="flex items-center gap-1">
-                              {isBot && <Bot className="size-3 text-signal" />}
-                              {isAgent && <UserRound className="size-3 text-sky-300" />}
-                              <span
-                                className={
-                                  isBot
-                                    ? "text-signal"
-                                    : isAgent
-                                    ? "text-sky-300"
-                                    : "text-slate-300"
-                                }
-                              >
-                                {isBot ? "Bot IA" : isAgent ? "Tú (Asesor)" : "Cliente"}
-                              </span>
-                            </span>
-                            <span className="text-[10px] text-slate-500 font-normal">
-                              {formatMessageTime(message.created_at)}
-                            </span>
-                          </div>
+                {/* Botón Flotante para Bajar al Chat / Responder */}
+                {showScrollBottom && (
+                  <div className="absolute bottom-3 right-4 z-20">
+                    <button
+                      type="button"
+                      onClick={handleScrollToBottomAndFocus}
+                      className="flex items-center gap-1.5 rounded-full border border-signal/50 bg-panel/95 backdrop-blur-md px-3.5 py-2 text-xs font-semibold text-signal shadow-2xl transition hover:bg-signal hover:text-ink active:scale-95 animate-in fade-in slide-in-from-bottom-2 duration-150"
+                      title="Bajar al final del chat para responder"
+                    >
+                      <ArrowDown className="size-3.5 animate-bounce" />
+                      <span>Bajar al chat</span>
+                    </button>
+                  </div>
+                )}
 
-                          {/* Contenido del Mensaje */}
-                          <p className="whitespace-pre-wrap">{message.content}</p>
-                        </div>
-                      </div>
-                    );
-                  })
+                {/* Botón Flotante para Subir al Comienzo del Chat */}
+                {showScrollTop && !showScrollBottom && (
+                  <div className="absolute top-3 right-4 z-20">
+                    <button
+                      type="button"
+                      onClick={() => scrollToTop("smooth")}
+                      className="flex items-center gap-1.5 rounded-full border border-line bg-panel/90 backdrop-blur-md px-3 py-1.5 text-[11px] font-medium text-slate-300 shadow-xl transition hover:bg-white/10 hover:text-white active:scale-95"
+                      title="Subir al comienzo de la conversación"
+                    >
+                      <ArrowUp className="size-3" />
+                      <span>Comienzo del chat</span>
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -951,6 +1043,7 @@ export default function ChatPage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

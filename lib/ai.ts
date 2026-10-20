@@ -148,32 +148,7 @@ INSTRUCCIONES CLAVE PARA ESTA RESPUESTA:
 
     const text = await callGeminiWithFallback(prompt);
 
-    let replyText = "¡Hola! Bienvenido a Deploy 🚀\n\n¿En qué te podemos colaborar hoy?\n\n📌 *Menú Principal:*\n1️⃣ Preguntas Frecuentes (FAQ)\n2️⃣ Servicios y Soluciones Web\n3️⃣ Soporte Técnico\n4️⃣ Hablar con un Asesor";
-    let requestHandoff = false;
-    let handoffReason: string | undefined = undefined;
-
-    try {
-      const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-      const firstBrace = cleaned.indexOf("{");
-      const lastBrace = cleaned.lastIndexOf("}");
-      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        const parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
-        replyText = parsed.replyText || replyText;
-        requestHandoff = Boolean(parsed.requestHandoff);
-        handoffReason = parsed.handoffReason;
-      } else if (cleaned) {
-        replyText = cleaned;
-      }
-    } catch (parseErr) {
-      console.warn("Aviso: el modelo no devolvió JSON puro, usando texto directo:", text);
-      replyText = text.replace(/```/g, "").trim() || replyText;
-    }
-
-    return {
-      replyText,
-      requestHandoff,
-      handoffReason,
-    };
+    return extractCleanReply(text);
   } catch (error) {
     console.error("Error al generar respuesta con Gemini (todos los modelos fallaron):", error);
     return {
@@ -182,4 +157,110 @@ INSTRUCCIONES CLAVE PARA ESTA RESPUESTA:
       handoffReason: undefined,
     };
   }
+}
+
+/**
+ * Limpia y extrae la respuesta del bot sin filtrar estructuras JSON técnicas
+ */
+export function cleanJsonArtifacts(text: string): string {
+  if (!text) return "";
+  let s = text.trim();
+
+  // Si tiene bloque de código markdown tipo ```json
+  s = s.replace(/```json/gi, "").replace(/```/g, "").trim();
+
+  // Si contiene el patrón de JSON crudo {"replyText": ...}
+  if (s.includes('"replyText"')) {
+    // Intentar regex para capturar el valor de replyText multilínea
+    const regex = /"replyText"\s*:\s*"([\s\S]*?)"(?:\s*,\s*"requestHandoff"|\s*,\s*"handoffReason"|\s*})/i;
+    const match = s.match(regex);
+    if (match && match[1]) {
+      s = match[1];
+    } else {
+      // Remover prefijo y sufijo JSON
+      s = s
+        .replace(/^\{\s*"replyText"\s*:\s*"/i, "")
+        .replace(/"\s*,\s*"requestHandoff"[\s\S]*$/i, "")
+        .replace(/"\s*\}$/, "");
+    }
+  }
+
+  // Normalizar secuencias de escape
+  s = s
+    .replace(/\\n/g, "\n")
+    .replace(/\\"/g, '"')
+    .replace(/\\t/g, "\t")
+    .replace(/\\\\/g, "\\")
+    .trim();
+
+  return s;
+}
+
+/**
+ * Extrae limpiamente replyText, requestHandoff y handoffReason
+ * sin importar si el modelo usó JSON puro, JSON con saltos de línea crudos, o texto simple.
+ */
+export function extractCleanReply(rawText: string): AIResponse {
+  const fallbackText =
+    "¡Hola! Bienvenido a Deploy 🚀\n\n¿En qué te podemos colaborar hoy?\n\n📌 *Menú Principal:*\n1️⃣ Preguntas Frecuentes (FAQ)\n2️⃣ Servicios y Soluciones Web\n3️⃣ Soporte Técnico\n4️⃣ Hablar con un Asesor";
+
+  if (!rawText || !rawText.trim()) {
+    return { replyText: fallbackText, requestHandoff: false };
+  }
+
+  const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
+
+  // 1. Intento con JSON.parse estándar
+  try {
+    const firstBrace = cleaned.indexOf("{");
+    const lastBrace = cleaned.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      const candidate = cleaned.substring(firstBrace, lastBrace + 1);
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object") {
+        const reply = typeof parsed.replyText === "string" ? parsed.replyText : "";
+        return {
+          replyText: cleanJsonArtifacts(reply) || fallbackText,
+          requestHandoff: Boolean(parsed.requestHandoff),
+          handoffReason: parsed.handoffReason || undefined,
+        };
+      }
+    }
+  } catch {
+    // Si falla por caracteres de control (newlines crudos en strings), usar regex tolerante
+  }
+
+  // 2. Extracción mediante regex multilínea tolerante a newlines crudos
+  try {
+    const replyRegex = /"replyText"\s*:\s*"([\s\S]*?)"(?:\s*,\s*"requestHandoff"|\s*,\s*"handoffReason"|\s*})/i;
+    const match = cleaned.match(replyRegex);
+
+    let extractedReply = "";
+    if (match && match[1]) {
+      extractedReply = match[1];
+    }
+
+    const handoffMatch = cleaned.match(/"requestHandoff"\s*:\s*(true|false)/i);
+    const requestHandoff = handoffMatch ? handoffMatch[1].toLowerCase() === "true" : false;
+
+    const reasonMatch = cleaned.match(/"handoffReason"\s*:\s*(?:"([^"]*)"|null)/i);
+    const handoffReason = reasonMatch && reasonMatch[1] ? reasonMatch[1] : undefined;
+
+    if (extractedReply) {
+      return {
+        replyText: cleanJsonArtifacts(extractedReply) || fallbackText,
+        requestHandoff,
+        handoffReason,
+      };
+    }
+  } catch {
+    // Continuar al paso 3
+  }
+
+  // 3. Fallback: Limpieza profunda de cualquier resto de JSON
+  return {
+    replyText: cleanJsonArtifacts(cleaned) || fallbackText,
+    requestHandoff: /"requestHandoff"\s*:\s*true/i.test(cleaned),
+    handoffReason: undefined,
+  };
 }

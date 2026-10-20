@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { generateAIResponse } from "@/lib/ai";
+import { generateAIResponse, cleanJsonArtifacts } from "@/lib/ai";
 import { sendWhatsAppMessage } from "@/lib/whatsapp";
 
 // 1. Verificación del Webhook por parte de Meta (GET)
@@ -271,10 +271,11 @@ export async function POST(request: NextRequest) {
               priorHistory as any,
               combinedClientText
             );
-            console.log(`🤖 Respuesta IA generada: "${aiResult.replyText.slice(0, 80)}..." | Handoff: ${aiResult.requestHandoff}`);
+            const finalReplyText = cleanJsonArtifacts(aiResult.replyText);
+            console.log(`🤖 Respuesta IA generada: "${finalReplyText.slice(0, 80)}..." | Handoff: ${aiResult.requestHandoff}`);
 
             // 4. Enviar respuesta por WhatsApp
-            const waResult = await sendWhatsAppMessage(fromPhone, aiResult.replyText);
+            const waResult = await sendWhatsAppMessage(fromPhone, finalReplyText);
             if (!waResult.success) {
               console.error("❌ Error enviando mensaje a WhatsApp:", JSON.stringify(waResult.error));
             } else {
@@ -285,7 +286,7 @@ export async function POST(request: NextRequest) {
             await supabase.from("messages").insert({
               conversation_id: conversationId,
               sender: "bot",
-              content: aiResult.replyText,
+              content: finalReplyText,
             });
 
             // 6. Si la IA detecta que el cliente necesita un asesor humano (Handoff)
@@ -294,7 +295,7 @@ export async function POST(request: NextRequest) {
                 .from("conversations")
                 .update({
                   status: "waiting_agent",
-                  last_message_preview: aiResult.replyText,
+                  last_message_preview: finalReplyText,
                   last_message_at: new Date().toISOString(),
                 })
                 .eq("id", conversationId);
