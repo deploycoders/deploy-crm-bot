@@ -302,7 +302,7 @@ export default function ConfiguracionPage() {
               <li>• <b>Menú Permanente:</b> Mantiene activo el menú principal (1️⃣ FAQ, 2️⃣ Servicios, 3️⃣ Soporte, 4️⃣ Asesor) o un pie de navegación en cada interacción.</li>
               <li>• <b>Enfoque Tecnológico:</b> Solo responde sobre desarrollo, software, automatizaciones y tecnología de Deploy.</li>
               <li>• <b>Deduplicación:</b> Protección contra mensajes dobles por reintentos de Meta en red.</li>
-              <li>• <b>Transferencia a Asesor:</b> Solo pasa a asesor si el cliente lo elige explícitamente en el chat o es una venta asegurada (listo para pagar/contratar). Del resto, siempre atiende el bot.</li>
+              <li>• <b>Transferencia a Asesor:</b> Pasa a asesor si el cliente lo solicita explícitamente (Opción 4) o al pedir precios y cotizaciones (atención personalizada).</li>
             </ul>
           </div>
         </div>
