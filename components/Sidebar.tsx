@@ -10,8 +10,12 @@ import {
   Settings,
   UsersRound,
   BellRing,
+  ShieldCheck,
+  LogOut,
+  UserCheck,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/context/AuthContext";
 
 const navigation = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -22,6 +26,7 @@ const navigation = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { user, logout } = useAuth();
   const [handoffCount, setHandoffCount] = useState<number>(0);
 
   // Obtener conteo real de conversaciones que requieren asesor humano
@@ -77,9 +82,19 @@ export function Sidebar() {
               </span>
             </div>
           </Link>
-          <div className="inline-flex items-center gap-1.5 rounded-full border border-signal/25 bg-signal/10 px-2.5 py-0.5 sm:px-3 sm:py-1 text-[11px] sm:text-xs font-medium text-signal lg:mt-6">
-            <span className="size-1.5 rounded-full bg-signal animate-pulse" />
-            Live System
+          <div className="flex items-center gap-2">
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-signal/25 bg-signal/10 px-2.5 py-0.5 sm:px-3 sm:py-1 text-[11px] sm:text-xs font-medium text-signal lg:mt-6">
+              <span className="size-1.5 rounded-full bg-signal animate-pulse" />
+              Live System
+            </div>
+            {/* Botón Logout móvil */}
+            <button
+              onClick={logout}
+              title="Cerrar sesión"
+              className="grid size-8 place-items-center rounded-lg border border-line bg-panel/70 text-slate-400 hover:text-red-400 hover:border-red-400/30 transition lg:hidden"
+            >
+              <LogOut className="size-3.5" />
+            </button>
           </div>
         </div>
 
@@ -119,34 +134,64 @@ export function Sidebar() {
         </nav>
       </div>
 
-      {/* Widget de Handoff Queue con DATA REAL de Supabase */}
-      <div className="mt-8 hidden rounded-xl border border-line bg-panel/80 p-4 lg:block shadow-lg">
-        <div className="flex items-center justify-between">
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">
-            Handoff Queue
+      <div className="space-y-3">
+        {/* Widget de Handoff Queue con DATA REAL de Supabase */}
+        <div className="hidden rounded-xl border border-line bg-panel/80 p-4 lg:block shadow-lg">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">
+              Handoff Queue
+            </p>
+            <BellRing
+              className={`size-4 ${
+                handoffCount > 0 ? "text-amber-400 animate-bounce" : "text-slate-500"
+              }`}
+            />
+          </div>
+          <p className="mt-2 text-2xl font-bold tracking-tight text-white">
+            {handoffCount}
           </p>
-          <BellRing
-            className={`size-4 ${
-              handoffCount > 0 ? "text-amber-400 animate-bounce" : "text-slate-500"
-            }`}
-          />
+          <p className="mt-0.5 text-xs leading-relaxed text-slate-400">
+            {handoffCount === 1
+              ? "1 lead esperando asesor."
+              : `${handoffCount} leads esperando asesor.`}
+          </p>
+          {handoffCount > 0 && (
+            <Link
+              href="/chat"
+              className="mt-2.5 block text-center rounded-lg bg-amber-500/10 border border-amber-500/20 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/20 transition"
+            >
+              Atender ahora →
+            </Link>
+          )}
         </div>
-        <p className="mt-3 text-3xl font-bold tracking-tight text-white">
-          {handoffCount}
-        </p>
-        <p className="mt-1 text-xs leading-relaxed text-slate-400">
-          {handoffCount === 1
-            ? "1 lead esperando asesor humano."
-            : `${handoffCount} leads esperando asesor humano.`}
-        </p>
-        {handoffCount > 0 && (
-          <Link
-            href="/chat"
-            className="mt-3 block text-center rounded-lg bg-amber-500/10 border border-amber-500/20 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/20 transition"
+
+        {/* Tarjeta de Usuario Super Administrador en Desktop */}
+        <div className="hidden lg:flex items-center justify-between rounded-xl border border-line bg-panel/90 p-3 shadow-md">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="relative">
+              <span className="grid size-9 place-items-center rounded-lg border border-signal/40 bg-signal/15 text-signal font-bold text-xs">
+                {user?.name ? user.name.slice(0, 2).toUpperCase() : "SA"}
+              </span>
+              <span className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-signal ring-2 ring-panel animate-pulse" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-semibold text-white">
+                {user?.name || "Jesús"}
+              </p>
+              <div className="flex items-center gap-1 text-[10px] text-signal font-medium">
+                <ShieldCheck className="size-3 shrink-0" />
+                <span className="truncate">Todos los permisos</span>
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={logout}
+            title="Cerrar sesión"
+            className="grid size-8 shrink-0 place-items-center rounded-lg border border-line/60 bg-ink/60 text-slate-400 hover:text-red-400 hover:border-red-400/40 hover:bg-red-500/10 transition"
           >
-            Atender ahora →
-          </Link>
-        )}
+            <LogOut className="size-3.5" />
+          </button>
+        </div>
       </div>
     </aside>
   );

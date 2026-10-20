@@ -15,8 +15,10 @@ import {
   Sparkles,
 } from "lucide-react";
 import { playMessageChime, playHandoffAlert, initAudio } from "@/lib/sound";
+import { useAuth } from "@/context/AuthContext";
 
 export default function ConfiguracionPage() {
+  const { user } = useAuth();
   return (
     <div className="mx-auto max-w-7xl space-y-6">
       <header>
@@ -33,6 +35,64 @@ export default function ConfiguracionPage() {
           Supervisa el estado de la API de WhatsApp, la Inteligencia Artificial y la base de datos en tiempo real.
         </p>
       </header>
+
+      {/* Card de Sesión Activa y Permisos de Administrador */}
+      <section className="rounded-xl border border-signal/30 bg-panel/80 p-5 shadow-glow backdrop-blur-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-line pb-4">
+          <div className="flex items-center gap-3">
+            <span className="grid size-12 place-items-center rounded-xl bg-signal/15 text-signal border border-signal/30">
+              <ShieldCheck className="size-6" />
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-bold text-white">
+                  Sesión Activa: {user?.name || "Jesús"}
+                </h2>
+                <span className="rounded-full bg-signal/15 border border-signal/30 px-2.5 py-0.5 text-[11px] font-semibold text-signal">
+                  Super Administrador
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">
+                {user?.email || "admin@salesbot.crm"} • Autenticado en Supabase Auth (auth.users) con Acceso Total
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-400">
+              <CheckCircle2 className="size-4" />
+              100% Permisos Habilitados
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs">
+          <div className="rounded-lg border border-line bg-ink/50 p-2.5 text-center">
+            <p className="text-slate-400 text-[10px] uppercase font-medium">WhatsApp API</p>
+            <p className="font-semibold text-signal mt-0.5">Control Total</p>
+          </div>
+          <div className="rounded-lg border border-line bg-ink/50 p-2.5 text-center">
+            <p className="text-slate-400 text-[10px] uppercase font-medium">Agente Gemini</p>
+            <p className="font-semibold text-signal mt-0.5">Control Total</p>
+          </div>
+          <div className="rounded-lg border border-line bg-ink/50 p-2.5 text-center">
+            <p className="text-slate-400 text-[10px] uppercase font-medium">Handoff Chats</p>
+            <p className="font-semibold text-signal mt-0.5">Control Total</p>
+          </div>
+          <div className="rounded-lg border border-line bg-ink/50 p-2.5 text-center">
+            <p className="text-slate-400 text-[10px] uppercase font-medium">DB Supabase</p>
+            <p className="font-semibold text-signal mt-0.5">Control Total</p>
+          </div>
+          <div className="rounded-lg border border-line bg-ink/50 p-2.5 text-center">
+            <p className="text-slate-400 text-[10px] uppercase font-medium">Contactos</p>
+            <p className="font-semibold text-signal mt-0.5">Control Total</p>
+          </div>
+          <div className="rounded-lg border border-line bg-ink/50 p-2.5 text-center">
+            <p className="text-slate-400 text-[10px] uppercase font-medium">Webhooks</p>
+            <p className="font-semibold text-signal mt-0.5">Acceso Libre</p>
+          </div>
+        </div>
+      </section>
 
       {/* Grid de Estado de Servicios */}
       <section className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
