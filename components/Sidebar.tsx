@@ -3,33 +3,18 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  Bot,
-  LayoutDashboard,
-  MessageSquareText,
-  Settings,
-  UsersRound,
-  BellRing,
-  ShieldCheck,
-  LogOut,
-  UserCheck,
-} from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
-
-const navigation = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/chat", label: "Mensajes", icon: MessageSquareText },
-  { href: "/contactos", label: "Contactos", icon: UsersRound },
-  { href: "/configuracion", label: "Configuración", icon: Settings },
-];
+import { playMessageChime, initAudio } from "@/lib/sound";
 
 export function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
   const [handoffCount, setHandoffCount] = useState<number>(0);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
 
-  // Obtener conteo real de conversaciones que requieren asesor humano
+  // Conteo real de conversaciones que requieren asesor humano
   const fetchHandoffCount = async () => {
     try {
       const { count, error } = await supabase
@@ -40,22 +25,40 @@ export function Sidebar() {
       if (!error && count !== null) {
         setHandoffCount(count);
       }
-    } catch (e) {
-      console.error("Error al cargar cola de handoff:", e);
+    } catch {
+      // Mantener estado base si Supabase no está conectado
+    }
+  };
+
+  // Conteo real de mensajes no leídos (sum de unread_count en conversations)
+  const fetchUnreadCount = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("conversations")
+        .select("unread_count")
+        .gt("unread_count", 0);
+
+      if (!error && data) {
+        const total = data.reduce((acc, c) => acc + (c.unread_count || 0), 0);
+        setUnreadCount(total);
+      }
+    } catch {
+      // Ignorar si Supabase no está disponible
     }
   };
 
   useEffect(() => {
     fetchHandoffCount();
+    fetchUnreadCount();
 
-    // Suscribirse a cambios en vivo en la tabla de conversaciones
     const channel = supabase
-      .channel("sidebar-handoff-counter")
+      .channel("sidebar-realtime")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "conversations" },
         () => {
           fetchHandoffCount();
+          fetchUnreadCount();
         }
       )
       .subscribe();
@@ -65,132 +68,191 @@ export function Sidebar() {
     };
   }, []);
 
+  const toggleSound = () => {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    if (next) {
+      initAudio().then(() => playMessageChime());
+    }
+  };
+
+  // Solo rutas que existen y tienen funcionalidad real
+  const navItems = [
+    {
+      href: "/",
+      label: "Dashboard",
+      icon: "dashboard",
+      activeMatch: (path: string) => path === "/",
+    },
+    {
+      href: "/chat",
+      label: "Mensajes",
+      icon: "chat",
+      badge: unreadCount > 0 ? (unreadCount > 99 ? "99+" : unreadCount.toString()) : undefined,
+      badgeClass: "bg-primary/15 text-primary border border-primary/20",
+      activeMatch: (path: string) => path.startsWith("/chat"),
+    },
+    {
+      href: "/contactos",
+      label: "Contactos",
+      icon: "groups",
+      activeMatch: (path: string) => path.startsWith("/contactos"),
+    },
+    {
+      href: "/configuracion",
+      label: "Configuración",
+      icon: "settings",
+      activeMatch: (path: string) => path.startsWith("/configuracion"),
+    },
+  ];
+
+  const userName = user?.name || user?.email?.split("@")[0] || "Admin";
+  const userInitials = userName.slice(0, 2).toUpperCase();
+
   return (
-    <aside className="sticky top-0 z-20 border-b border-line bg-ink/95 px-3 py-2.5 sm:px-4 sm:py-4 backdrop-blur-xl lg:h-screen lg:w-72 lg:border-b-0 lg:border-r lg:px-5 lg:py-6 lg:flex lg:flex-col lg:justify-between">
-      <div>
-        <div className="flex items-center justify-between gap-4 lg:block">
-          <Link href="/" className="flex items-center gap-2.5 group">
-            <span className="grid size-9 sm:size-11 place-items-center rounded-lg border border-signal/35 bg-signal/10 shadow-glow transition group-hover:scale-105">
-              <Bot className="size-4 sm:size-5 text-signal" />
-            </span>
-            <div>
-              <span className="block text-sm sm:text-base font-semibold text-white tracking-tight">
+    <aside className="fixed left-0 top-0 h-full w-72 bg-surface-container-lowest z-50 flex flex-col justify-between border-r border-surface-container-high/60 shadow-[0_1px_8px_rgba(0,0,0,0.4)]">
+      <div className="flex flex-col">
+        {/* Header de la Marca */}
+        <div className="p-5 border-b border-surface-container-high/40">
+          <div className="flex items-center justify-between mb-2">
+            <Link href="/" className="flex items-center gap-2 group">
+              <span className="material-symbols-outlined text-primary text-[22px] transition-transform group-hover:scale-110">
+                smart_toy
+              </span>
+              <span className="font-semibold text-sm text-on-surface tracking-tight">
                 SalesBot CRM
               </span>
-              <span className="text-[11px] sm:text-xs text-slate-400">
-                Deploy AI Cockpit
+            </Link>
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+              </span>
+              <span className="text-[11px] font-bold text-primary uppercase tracking-wider">
+                Live
               </span>
             </div>
-          </Link>
-          <div className="flex items-center gap-2">
-            <div className="inline-flex items-center gap-1.5 rounded-full border border-signal/25 bg-signal/10 px-2.5 py-0.5 sm:px-3 sm:py-1 text-[11px] sm:text-xs font-medium text-signal lg:mt-6">
-              <span className="size-1.5 rounded-full bg-signal animate-pulse" />
-              Live System
-            </div>
-            {/* Botón Logout móvil */}
-            <button
-              onClick={logout}
-              title="Cerrar sesión"
-              className="grid size-8 place-items-center rounded-lg border border-line bg-panel/70 text-slate-400 hover:text-red-400 hover:border-red-400/30 transition lg:hidden"
-            >
-              <LogOut className="size-3.5" />
-            </button>
+          </div>
+          <div className="text-xs text-on-surface-variant flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-outline-variant"></span>
+            Deploy AI Cockpit v2.4
           </div>
         </div>
 
-        <nav className="mt-3 sm:mt-5 flex gap-1.5 sm:gap-2 overflow-x-auto pb-0.5 lg:mt-8 lg:block lg:space-y-2 lg:overflow-visible">
-          {navigation.map((item) => {
-            const isActive =
-              item.href === "/"
-                ? pathname === "/"
-                : pathname?.startsWith(item.href);
-
-            const isChatWithHandoff = item.href === "/chat" && handoffCount > 0;
+        {/* Navegación Principal */}
+        <nav className="p-4 space-y-1.5">
+          {navItems.map((item, idx) => {
+            const isActive = item.activeMatch(pathname);
 
             return (
               <Link
-                key={item.label}
+                key={idx}
                 href={item.href}
-                className={`group flex min-w-max items-center gap-2.5 sm:gap-3 rounded-lg border px-2.5 sm:px-3 py-1.5 sm:py-2.5 text-xs sm:text-sm font-medium transition ${
+                className={`flex items-center justify-between px-4 py-2.5 rounded-lg transition-all group ${
                   isActive
-                    ? "border-signal/30 bg-signal/10 text-white shadow-glow"
-                    : "border-transparent text-slate-300 hover:border-line hover:bg-white/5 hover:text-white"
+                    ? "bg-surface-container text-primary font-semibold shadow-[inset_0_0_0_1px_rgba(78,222,163,0.35)]"
+                    : "text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface"
                 }`}
               >
-                <item.icon
-                  className={`size-3.5 sm:size-4 transition ${
-                    isActive ? "text-signal" : "text-slate-400 group-hover:text-signal"
-                  }`}
-                />
-                <span>{item.label}</span>
-                {isChatWithHandoff && (
-                  <span className="ml-1 inline-flex items-center justify-center rounded-full bg-amber-400/20 px-1.5 py-0.2 text-[10px] sm:text-[11px] font-bold text-amber-300 border border-amber-400/30 animate-pulse">
-                    {handoffCount}
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`material-symbols-outlined text-[20px] transition-colors ${
+                      isActive ? "text-primary" : "group-hover:text-primary"
+                    }`}
+                  >
+                    {item.icon}
                   </span>
-                )}
+                  <span className="text-sm font-semibold">{item.label}</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {item.badge && (
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full font-bold ${item.badgeClass}`}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
+                  {isActive && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary"></span>
+                  )}
+                </div>
               </Link>
             );
           })}
         </nav>
       </div>
 
-      <div className="space-y-3">
-        {/* Widget de Handoff Queue con DATA REAL de Supabase */}
-        <div className="hidden rounded-xl border border-line bg-panel/80 p-4 lg:block shadow-lg">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">
-              Handoff Queue
-            </p>
-            <BellRing
-              className={`size-4 ${
-                handoffCount > 0 ? "text-amber-400 animate-bounce" : "text-slate-500"
-              }`}
-            />
-          </div>
-          <p className="mt-2 text-2xl font-bold tracking-tight text-white">
-            {handoffCount}
-          </p>
-          <p className="mt-0.5 text-xs leading-relaxed text-slate-400">
-            {handoffCount === 1
-              ? "1 lead esperando asesor."
-              : `${handoffCount} leads esperando asesor.`}
-          </p>
-          {handoffCount > 0 && (
-            <Link
-              href="/chat"
-              className="mt-2.5 block text-center rounded-lg bg-amber-500/10 border border-amber-500/20 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/20 transition"
-            >
-              Atender ahora →
-            </Link>
-          )}
-        </div>
-
-        {/* Tarjeta de Usuario Super Administrador en Desktop */}
-        <div className="hidden lg:flex items-center justify-between rounded-xl border border-line bg-panel/90 p-3 shadow-md">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="relative">
-              <span className="grid size-9 place-items-center rounded-lg border border-signal/40 bg-signal/15 text-signal font-bold text-xs">
-                {user?.name ? user.name.slice(0, 2).toUpperCase() : "SA"}
+      {/* Pie del Sidebar */}
+      <div className="p-4 space-y-3 border-t border-surface-container-high/40">
+        {/* Handoff Queue Widget — solo visible si hay conversaciones pendientes */}
+        {handoffCount > 0 && (
+          <Link
+            href="/chat"
+            className="block bg-amber-400/10 rounded-lg p-3 border border-amber-400/30 hover:bg-amber-400/15 transition-colors"
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[11px] font-bold text-amber-300 uppercase tracking-wider">
+                Handoff Queue
               </span>
-              <span className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-signal ring-2 ring-panel animate-pulse" />
+              <span className="flex h-2 w-2 rounded-full bg-amber-400 animate-ping"></span>
             </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-semibold text-white">
-                {user?.name || "Jesús"}
-              </p>
-              <div className="flex items-center gap-1 text-[10px] text-signal font-medium">
-                <ShieldCheck className="size-3 shrink-0" />
-                <span className="truncate">Todos los permisos</span>
-              </div>
+            <p className="text-xs text-amber-200 font-medium">
+              {handoffCount === 1
+                ? "1 prospecto esperando asesor"
+                : `${handoffCount} prospectos esperando asesor`}
+            </p>
+            <span className="text-xs text-amber-300/70 mt-1 block">
+              Toca para atender →
+            </span>
+          </Link>
+        )}
+
+        {/* Tarjeta de Usuario */}
+        <div className="flex items-center justify-between p-2 bg-surface-container-high/30 rounded-lg">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-surface-container-high flex items-center justify-center text-sm text-primary font-bold border border-primary/20">
+              {userInitials}
+            </div>
+            <div className="flex flex-col">
+              <span className="text-sm text-on-surface leading-none font-semibold truncate max-w-[140px]">
+                {userName}
+              </span>
+              <span className="text-xs text-on-surface-variant mt-0.5">
+                {user?.email ? user.email : "Admin • Acceso Total"}
+              </span>
             </div>
           </div>
           <button
             onClick={logout}
+            className="w-7 h-7 rounded flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high hover:text-error transition-colors"
             title="Cerrar sesión"
-            className="grid size-8 shrink-0 place-items-center rounded-lg border border-line/60 bg-ink/60 text-slate-400 hover:text-red-400 hover:border-red-400/40 hover:bg-red-500/10 transition"
+            type="button"
           >
-            <LogOut className="size-3.5" />
+            <span className="material-symbols-outlined text-[18px]">logout</span>
           </button>
+        </div>
+
+        {/* Barra de Telemetría */}
+        <div className="pt-2 border-t border-surface-container-high/40 flex items-center justify-between text-xs text-outline">
+          <button
+            onClick={toggleSound}
+            type="button"
+            className="flex items-center gap-1 hover:text-primary transition-colors cursor-pointer"
+          >
+            <span
+              className={`material-symbols-outlined text-[13px] ${
+                soundEnabled ? "text-primary" : "text-outline"
+              }`}
+            >
+              {soundEnabled ? "volume_up" : "volume_off"}
+            </span>
+            <span>Sonido {soundEnabled ? "ON" : "OFF"}</span>
+          </button>
+          <div className="flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+            <span>Supabase RT</span>
+          </div>
         </div>
       </div>
     </aside>

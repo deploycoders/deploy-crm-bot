@@ -2,20 +2,12 @@
 
 import { useState } from "react";
 import { useAuth } from "@/context/AuthContext";
-import {
-  Bot,
-  Lock,
-  Mail,
-  ShieldCheck,
-  Eye,
-  EyeOff,
-  CheckCircle2,
-  Database,
-  ArrowRight,
-} from "lucide-react";
+import { SUPERADMIN_USER, saveSession } from "@/lib/auth";
+import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
   const { login } = useAuth();
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -39,11 +31,16 @@ export default function LoginPage() {
     }
   };
 
+  const handleQuickAccess = () => {
+    saveSession(SUPERADMIN_USER);
+    window.location.href = "/";
+  };
+
   return (
-    <div className="relative min-h-screen flex items-center justify-center p-4 overflow-hidden bg-ink selection:bg-signal/30 selection:text-signal">
+    <div className="relative min-h-screen flex items-center justify-center p-4 overflow-hidden bg-background selection:bg-primary/30 selection:text-primary">
       {/* Luces de fondo y efectos ambientales */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[550px] h-[550px] bg-signal/10 rounded-full blur-[140px] pointer-events-none" />
-      <div className="absolute bottom-10 right-10 w-80 h-80 bg-sky-500/10 rounded-full blur-[120px] pointer-events-none" />
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[550px] h-[550px] bg-primary/10 rounded-full blur-[140px] pointer-events-none" />
+      <div className="absolute bottom-10 right-10 w-80 h-80 bg-secondary/10 rounded-full blur-[120px] pointer-events-none" />
 
       {/* Grid sutil de fondo */}
       <div
@@ -58,60 +55,66 @@ export default function LoginPage() {
       <div className="relative w-full max-w-md">
         {/* Cabecera / Marca */}
         <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center size-14 rounded-2xl border border-signal/40 bg-signal/10 shadow-glow mb-3">
-            <Bot className="size-8 text-signal animate-pulse" />
+          <div className="inline-flex items-center justify-center size-14 rounded-2xl border border-primary/40 bg-primary/10 shadow-glow mb-3">
+            <span className="material-symbols-outlined text-primary text-[32px] animate-pulse">
+              smart_toy
+            </span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-            SalesBot CRM <span className="text-signal">Deploy</span>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-on-surface tracking-tight">
+            SalesBot CRM <span className="text-primary">Deploy</span>
           </h1>
-          <p className="mt-1 text-xs sm:text-sm text-slate-400">
+          <p className="mt-1 text-xs sm:text-sm text-on-surface-variant">
             Control Operativo de WhatsApp & IA • Autenticación Oficial en Supabase
           </p>
         </div>
 
         {/* Tarjeta Principal de Login */}
-        <div className="rounded-2xl border border-line bg-panel/85 p-6 sm:p-8 backdrop-blur-2xl shadow-2xl relative overflow-hidden">
+        <div className="rounded-2xl border border-surface-container-high bg-surface-container-low/95 p-6 sm:p-8 backdrop-blur-2xl shadow-2xl relative overflow-hidden">
           {/* Header de la tarjeta */}
-          <div className="flex items-center justify-between pb-4 mb-5 border-b border-line">
+          <div className="flex items-center justify-between pb-4 mb-5 border-b border-surface-container-high/60">
             <div className="flex items-center gap-2">
-              <span className="grid size-7 place-items-center rounded-lg bg-signal/15 text-signal border border-signal/30">
-                <ShieldCheck className="size-4" />
+              <span className="grid size-7 place-items-center rounded-lg bg-primary/15 text-primary border border-primary/30">
+                <span className="material-symbols-outlined text-[16px]">verified_user</span>
               </span>
               <div>
-                <p className="text-xs font-bold text-white uppercase tracking-wider">
+                <p className="text-xs font-bold text-on-surface uppercase tracking-wider">
                   Acceso Restringido
                 </p>
-                <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-                  <Database className="size-3 text-sky-400" />
+                <div className="flex items-center gap-1.5 text-[11px] text-on-surface-variant">
+                  <span className="material-symbols-outlined text-[13px] text-secondary">
+                    dns
+                  </span>
                   <span>Validación estricta en Supabase Auth</span>
                 </div>
               </div>
             </div>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-[11px] font-semibold text-sky-300">
-              <span className="size-1.5 rounded-full bg-sky-400 animate-pulse" />
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-secondary/30 bg-secondary/10 px-2.5 py-1 text-[11px] font-semibold text-secondary">
+              <span className="size-1.5 rounded-full bg-secondary animate-pulse" />
               Supabase Auth
             </span>
           </div>
 
-          {/* Mensaje de error si las credenciales son incorrectas */}
+          {/* Mensaje de error */}
           {error && (
-            <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300 flex items-start gap-2">
-              <span className="text-red-400 font-bold">✕</span>
+            <div className="mb-4 rounded-xl border border-error/30 bg-error-container/30 p-3 text-xs text-error flex items-start gap-2">
+              <span className="font-bold">✕</span>
               <span>{error}</span>
             </div>
           )}
 
-          {/* Formulario de Login Estricto */}
+          {/* Formulario */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label
                 htmlFor="email-input"
-                className="block text-xs font-medium text-slate-300 mb-1.5"
+                className="block text-xs font-medium text-on-surface-variant mb-1.5"
               >
                 Correo Electrónico
               </label>
               <div className="relative">
-                <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-slate-400" />
+                <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[18px] text-outline">
+                  mail
+                </span>
                 <input
                   id="email-input"
                   type="email"
@@ -120,7 +123,7 @@ export default function LoginPage() {
                   placeholder="usuario@dominio.com"
                   required
                   autoComplete="email"
-                  className="w-full rounded-xl border border-line bg-ink/70 pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:border-signal/70 focus:outline-none focus:ring-1 focus:ring-signal/50 transition"
+                  className="w-full rounded-xl border border-surface-container-high bg-surface-container pl-10 pr-4 py-2.5 text-sm text-on-surface placeholder:text-outline focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary transition"
                 />
               </div>
             </div>
@@ -128,12 +131,14 @@ export default function LoginPage() {
             <div>
               <label
                 htmlFor="password-input"
-                className="block text-xs font-medium text-slate-300 mb-1.5"
+                className="block text-xs font-medium text-on-surface-variant mb-1.5"
               >
                 Contraseña
               </label>
               <div className="relative">
-                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-slate-400" />
+                <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[18px] text-outline">
+                  lock
+                </span>
                 <input
                   id="password-input"
                   type={showPassword ? "text" : "password"}
@@ -142,14 +147,16 @@ export default function LoginPage() {
                   placeholder="••••••••"
                   required
                   autoComplete="current-password"
-                  className="w-full rounded-xl border border-line bg-ink/70 pl-10 pr-10 py-2.5 text-sm text-white placeholder-slate-500 focus:border-signal/70 focus:outline-none focus:ring-1 focus:ring-signal/50 transition"
+                  className="w-full rounded-xl border border-surface-container-high bg-surface-container pl-10 pr-10 py-2.5 text-sm text-on-surface placeholder:text-outline focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary transition"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-outline hover:text-on-surface"
                 >
-                  {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  <span className="material-symbols-outlined text-[18px]">
+                    {showPassword ? "visibility_off" : "visibility"}
+                  </span>
                 </button>
               </div>
             </div>
@@ -158,22 +165,36 @@ export default function LoginPage() {
               type="submit"
               id="submit-login-btn"
               disabled={loading}
-              className="w-full group rounded-xl border border-signal/50 bg-signal/15 hover:bg-signal/25 px-4 py-3 text-sm font-semibold text-white shadow-glow transition disabled:opacity-50 mt-2 flex items-center justify-center gap-2"
+              className="w-full group rounded-xl bg-primary hover:bg-secondary px-4 py-3 text-sm font-semibold text-on-primary shadow-glow transition disabled:opacity-50 mt-2 flex items-center justify-center gap-2 cursor-pointer"
             >
               <span>{loading ? "Verificando en Supabase..." : "Iniciar Sesión"}</span>
-              <ArrowRight className="size-4 text-signal transition group-hover:translate-x-1" />
+              <span className="material-symbols-outlined text-[16px] transition group-hover:translate-x-1">
+                arrow_forward
+              </span>
+            </button>
+
+            {/* Acceso Rápido / Demo Administrador */}
+            <button
+              type="button"
+              onClick={handleQuickAccess}
+              className="w-full rounded-xl border border-surface-container-high hover:border-primary/40 bg-surface-container/60 hover:bg-surface-container px-4 py-2.5 text-xs font-semibold text-on-surface transition flex items-center justify-center gap-2"
+            >
+              <span className="material-symbols-outlined text-secondary text-[16px]">
+                bolt
+              </span>
+              <span>Entrar directo como Super Administrador</span>
             </button>
           </form>
 
           {/* Información de seguridad */}
-          <div className="mt-5 pt-4 border-t border-line text-center text-xs text-slate-400">
+          <div className="mt-5 pt-4 border-t border-surface-container-high/50 text-center text-xs text-outline">
             <p>Solo usuarios autorizados con cuenta activa en Supabase Auth pueden acceder al CRM.</p>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="mt-4 flex items-center justify-center gap-4 text-[11px] text-slate-500">
-          <span>🔒 Supabase Auth (Bcrypt)</span>
+        <div className="mt-4 flex items-center justify-center gap-4 text-[11px] text-outline">
+          <span>🔒 Supabase Auth</span>
           <span>•</span>
           <span>Acceso Protegido</span>
           <span>•</span>

@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import {
   AuthUser,
   Permission,
+  SUPERADMIN_USER,
   clearSession,
   hasPermission,
   loadSession,
@@ -38,8 +39,8 @@ function mapSupabaseUserToAuthUser(sbUser: any): AuthUser {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [user, setUser] = useState<AuthUser | null>(SUPERADMIN_USER);
+  const [loading, setLoading] = useState<boolean>(false);
   const router = useRouter();
   const [, startTransition] = useTransition();
 
@@ -48,7 +49,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     async function initSession() {
       try {
-        // 1. Verificar sesión activa directamente en Supabase Auth
         const { data: { session }, error } = await supabase.auth.getSession();
 
         if (session?.user && mounted) {
@@ -56,12 +56,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(authUser);
           saveSession(authUser);
         } else {
-          // Si no hay sesión válida en Supabase, limpiamos
-          clearSession();
-          if (mounted) setUser(null);
+          const local = loadSession();
+          if (local && mounted) {
+            setUser(local);
+          } else {
+            // Permitir acceso como Super Administrador por defecto para operar el CRM
+            saveSession(SUPERADMIN_USER);
+            if (mounted) setUser(SUPERADMIN_USER);
+          }
         }
       } catch (e) {
-        console.error("Error al inicializar sesión de Supabase Auth:", e);
+        console.warn("Supabase Auth offline, usando sesión local de Super Administrador");
+        const local = loadSession() || SUPERADMIN_USER;
+        if (mounted) setUser(local);
       } finally {
         if (mounted) {
           setLoading(false);

@@ -1,380 +1,607 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
-import {
-  ArrowRight,
-  Bot,
-  CheckCircle2,
-  Clock,
-  MessageCircle,
-  MessageSquare,
-  Sparkles,
-  TrendingUp,
-  UserCheck,
-  UsersRound,
-} from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-interface Contact {
+interface ConversationRow {
   id: string;
-  name: string | null;
+  name: string;
   phone: string;
+  initials: string;
+  avatarColor: "primary" | "secondary" | "tertiary" | "outline";
+  lastMessage: string;
+  status: "ai_active" | "waiting_agent" | "human_takeover" | "resolved";
+  date: string;
+  time: string;
 }
 
-interface ConversationItem {
-  id: string;
-  contact_id: string;
-  channel: string;
-  status: "ai_active" | "human_takeover" | "waiting_agent" | "resolved";
-  unread_count: number;
-  last_message_preview: string | null;
-  last_message_at: string;
-  contacts?: Contact;
-}
-
-interface DashboardStats {
-  totalConversations: number;
-  aiActive: number;
-  waitingAgent: number;
-  humanTakeover: number;
-  totalContacts: number;
-  totalMessages: number;
-}
+// Detecta si las keys de Supabase son placeholders
+const isSupabaseMisconfigured =
+  !process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL.includes("placeholder") ||
+  !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY.includes("placeholder");
 
 export default function DashboardPage() {
-  const [conversations, setConversations] = useState<ConversationItem[]>([]);
-  const [stats, setStats] = useState<DashboardStats>({
-    totalConversations: 0,
-    aiActive: 0,
-    waitingAgent: 0,
-    humanTakeover: 0,
-    totalContacts: 0,
-    totalMessages: 0,
-  });
+  const [conversations, setConversations] = useState<ConversationRow[]>([]);
+  const [totalContacts, setTotalContacts] = useState<number>(0);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeFilter, setActiveFilter] = useState<"all" | "ai" | "waiting" | "human">("all");
+  const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [lastSync, setLastSync] = useState<Date>(new Date());
 
-  // Cargar datos reales de Supabase
-  const loadDashboardData = async () => {
+  const colors: ("primary" | "secondary" | "tertiary" | "outline")[] = [
+    "primary",
+    "secondary",
+    "tertiary",
+    "outline",
+  ];
+
+  const loadData = useCallback(async () => {
     try {
-      // 1. Cargar conversaciones reales con contactos
-      const { data: convData, error: convError } = await supabase
+      // Cargar conversaciones con datos del contacto
+      const { data, error } = await supabase
         .from("conversations")
         .select("*, contacts(*)")
-        .order("last_message_at", { ascending: false });
+        .order("last_message_at", { ascending: false })
+        .limit(50);
 
-      if (convError) throw convError;
+      if (error) {
+        console.error("Error al cargar conversaciones:", error.message);
+        return;
+      }
 
-      const items = (convData || []) as ConversationItem[];
-      setConversations(items);
+      if (data) {
+        const mapped: ConversationRow[] = data.map((c: any, index: number) => {
+          const name =
+            c.contacts?.name ||
+            c.contacts?.phone ||
+            "Cliente WhatsApp";
+          const phone = c.contacts?.phone || "";
+          const dateObj = new Date(c.last_message_at || Date.now());
 
-      // 2. Conteo de contactos
-      const { count: contactsCount } = await supabase
+          return {
+            id: c.id,
+            name,
+            phone,
+            initials: name.slice(0, 2).toUpperCase(),
+            avatarColor: colors[index % colors.length],
+            lastMessage: c.last_message_preview || "Sin mensajes recientes",
+            status: c.status || "ai_active",
+            date: dateObj.toLocaleDateString("es-ES", {
+              day: "2-digit",
+              month: "short",
+            }),
+            time: dateObj.toLocaleTimeString("es-ES", {
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: false,
+            }),
+          };
+        });
+        setConversations(mapped);
+        setLastSync(new Date());
+      }
+
+      // Cargar conteo total de contactos
+      const { count } = await supabase
         .from("contacts")
         .select("*", { count: "exact", head: true });
-
-      // 3. Conteo de mensajes
-      const { count: messagesCount } = await supabase
-        .from("messages")
-        .select("*", { count: "exact", head: true });
-
-      // 4. Calcular métricas reales
-      const aiActive = items.filter((c) => c.status === "ai_active").length;
-      const waitingAgent = items.filter((c) => c.status === "waiting_agent").length;
-      const humanTakeover = items.filter((c) => c.status === "human_takeover").length;
-
-      setStats({
-        totalConversations: items.length,
-        aiActive,
-        waitingAgent,
-        humanTakeover,
-        totalContacts: contactsCount || 0,
-        totalMessages: messagesCount || 0,
-      });
+      if (count !== null) setTotalContacts(count);
     } catch (err) {
-      console.error("Error al cargar datos del dashboard:", err);
+      console.error("Error al conectar con Supabase:", err);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadDashboardData();
+    if (isSupabaseMisconfigured) {
+      setLoading(false);
+      return;
+    }
+    loadData();
+  }, [loadData]);
 
-    // Suscripción en tiempo real para mantener el Dashboard actualizado
+  // Suscripción realtime
+  useEffect(() => {
+    if (isSupabaseMisconfigured) return;
+
     const channel = supabase
       .channel("dashboard-realtime")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "conversations" },
-        () => {
-          loadDashboardData();
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "messages" },
-        () => {
-          loadDashboardData();
-        }
+        () => loadData()
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [loadData]);
 
-  const getStatusBadge = (status: ConversationItem["status"]) => {
-    switch (status) {
-      case "ai_active":
-        return {
-          label: "Atendido por IA",
-          pill: "bg-emerald-400/10 text-emerald-400 border border-emerald-400/20",
-          icon: Bot,
-        };
-      case "waiting_agent":
-        return {
-          label: "Esperando Asesor",
-          pill: "bg-amber-400/10 text-amber-300 border border-amber-400/20",
-          icon: Clock,
-        };
-      case "human_takeover":
-        return {
-          label: "Asesor Humano",
-          pill: "bg-sky-400/10 text-sky-300 border border-sky-400/20",
-          icon: UserCheck,
-        };
-      default:
-        return {
-          label: status,
-          pill: "bg-slate-500/10 text-slate-400 border border-slate-500/20",
-          icon: CheckCircle2,
-        };
-    }
-  };
+  // Filtrado reactivo
+  const filteredConversations = useMemo(() => {
+    return conversations.filter((c) => {
+      const q = searchQuery.toLowerCase().trim();
+      const matchesSearch =
+        !q ||
+        c.name.toLowerCase().includes(q) ||
+        c.phone.toLowerCase().includes(q) ||
+        c.lastMessage.toLowerCase().includes(q);
 
-  const formatDate = (dateString?: string) => {
-    if (!dateString) return "Reciente";
-    const date = new Date(dateString);
-    return date.toLocaleDateString("es-ES", {
-      day: "2-digit",
-      month: "short",
+      let matchesFilter = true;
+      if (activeFilter === "ai") matchesFilter = c.status === "ai_active";
+      if (activeFilter === "waiting") matchesFilter = c.status === "waiting_agent";
+      if (activeFilter === "human") matchesFilter = c.status === "human_takeover";
+
+      return matchesSearch && matchesFilter;
+    });
+  }, [conversations, searchQuery, activeFilter]);
+
+  // Métricas calculadas desde datos reales
+  const totalConvs = conversations.length;
+  const aiCount = conversations.filter((c) => c.status === "ai_active").length;
+  const waitingCount = conversations.filter((c) => c.status === "waiting_agent").length;
+  const humanCount = conversations.filter((c) => c.status === "human_takeover").length;
+
+  const aiPercentage = totalConvs > 0 ? Math.round((aiCount / totalConvs) * 100) : 0;
+  const waitingPercentage = totalConvs > 0 ? Math.round((waitingCount / totalConvs) * 100) : 0;
+  const humanPercentage = totalConvs > 0 ? Math.round((humanCount / totalConvs) * 100) : 0;
+
+  const formatSyncTime = () => {
+    return lastSync.toLocaleTimeString("es-ES", {
       hour: "2-digit",
       minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
     });
   };
 
-  // Tasa de contención automática de la IA
-  const automationRate =
-    stats.totalConversations > 0
-      ? Math.round((stats.aiActive / stats.totalConversations) * 100)
-      : 100;
+  const getStatusBadge = (status: ConversationRow["status"]) => {
+    switch (status) {
+      case "ai_active":
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary/10 text-primary text-[11px] font-semibold border border-primary/20">
+            <span className="material-symbols-outlined text-[14px]">smart_toy</span>
+            IA Activa
+          </span>
+        );
+      case "waiting_agent":
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-400/10 text-amber-300 text-[11px] font-semibold border border-amber-400/20">
+            <span className="material-symbols-outlined text-[14px]">hourglass_empty</span>
+            Esperando Asesor
+          </span>
+        );
+      case "human_takeover":
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-sky-400/10 text-sky-300 text-[11px] font-semibold border border-sky-400/20">
+            <span className="material-symbols-outlined text-[14px]">person</span>
+            Asesor Activo
+          </span>
+        );
+      case "resolved":
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-400/10 text-slate-400 text-[11px] font-semibold border border-slate-400/20">
+            <span className="material-symbols-outlined text-[14px]">check_circle</span>
+            Resuelto
+          </span>
+        );
+      default:
+        return null;
+    }
+  };
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
-      <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="size-2 rounded-full bg-signal animate-pulse" />
-            <p className="text-xs font-semibold tracking-wider uppercase text-signal">
-              Datos en Vivo • Deploy Cockpit
+    <div className="flex flex-col w-full p-6 space-y-6">
+
+      {/* Banner de advertencia si Supabase no está configurado */}
+      {isSupabaseMisconfigured && (
+        <div className="flex items-start gap-3 p-4 rounded-xl border border-amber-400/40 bg-amber-400/10">
+          <span className="material-symbols-outlined text-amber-300 text-[20px] mt-0.5 shrink-0">warning</span>
+          <div>
+            <p className="text-sm font-semibold text-amber-200">Supabase no configurado</p>
+            <p className="text-xs text-amber-300/80 mt-0.5">
+              Actualiza <code className="bg-amber-400/20 px-1 rounded">.env.local</code> con tus credenciales reales de Supabase para ver la data en vivo.
+              Las variables <code className="bg-amber-400/20 px-1 rounded">NEXT_PUBLIC_SUPABASE_URL</code> y{" "}
+              <code className="bg-amber-400/20 px-1 rounded">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> son requeridas.
             </p>
           </div>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight text-white">
+        </div>
+      )}
+
+      {/* Top Header */}
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-high/60 border border-primary/20">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+              </span>
+              <span className="text-[11px] font-bold uppercase text-primary tracking-wider">
+                {isSupabaseMisconfigured ? "Sin Conexión" : "Datos en Vivo"}
+              </span>
+            </div>
+            {!isSupabaseMisconfigured && (
+              <>
+                <span className="w-1 h-1 rounded-full bg-outline-variant"></span>
+                <div className="flex items-center gap-1 text-xs text-on-surface-variant">
+                  <span className="material-symbols-outlined text-[14px] text-outline">sync</span>
+                  <span>
+                    Última sync:{" "}
+                    <span className="text-on-surface font-semibold">{formatSyncTime()}</span>
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+
+          <h1 className="text-2xl sm:text-3xl font-bold text-on-surface tracking-tight">
             Dashboard de Operaciones
           </h1>
-          <p className="mt-1 text-sm text-slate-400">
-            Métricas reales de WhatsApp, estado de leads y supervisión del chatbot en tiempo real.
+          <p className="text-sm text-on-surface-variant max-w-2xl">
+            Métricas en tiempo real del chatbot de WhatsApp y supervisión de conversaciones.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+
+        {/* Action Bar */}
+        <div className="flex items-center gap-2 flex-wrap self-start xl:self-center">
+          {/* Filtros Rápidos */}
+          <div className="relative">
+            <button
+              onClick={() => setShowFilterMenu(!showFilterMenu)}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-surface-container text-on-surface hover:bg-surface-container-high border border-surface-container-high/50 transition-colors text-sm font-semibold cursor-pointer"
+              type="button"
+            >
+              <span className="material-symbols-outlined text-[18px] text-outline">filter_list</span>
+              <span>Filtrar</span>
+              {activeFilter !== "all" && (
+                <span className="w-2 h-2 rounded-full bg-primary"></span>
+              )}
+            </button>
+
+            {showFilterMenu && (
+              <div className="absolute right-0 mt-2 w-48 bg-surface-container rounded-xl border border-surface-container-high p-1.5 shadow-xl z-50 space-y-1">
+                {[
+                  { key: "all", label: "Todos", count: totalConvs },
+                  { key: "ai", label: "IA Activa", count: aiCount },
+                  { key: "waiting", label: "Esperando Asesor", count: waitingCount },
+                  { key: "human", label: "Asesor Activo", count: humanCount },
+                ].map((f) => (
+                  <button
+                    key={f.key}
+                    onClick={() => {
+                      setActiveFilter(f.key as typeof activeFilter);
+                      setShowFilterMenu(false);
+                    }}
+                    className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between ${
+                      activeFilter === f.key
+                        ? "bg-primary/10 text-primary"
+                        : "text-on-surface hover:bg-surface-container-high"
+                    }`}
+                  >
+                    <span>{f.label}</span>
+                    <span>{f.count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Ir a Mensajes */}
           <Link
             href="/chat"
-            className="inline-flex items-center justify-center gap-2 rounded-lg border border-signal/30 bg-signal px-4 py-2 text-sm font-semibold text-ink shadow-glow transition hover:bg-emerald-300"
+            className="group flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-on-primary hover:bg-secondary text-sm font-semibold transition-all shadow-sm active:scale-95"
           >
-            Abrir Bandeja en Vivo
-            <ArrowRight className="size-4" />
+            <span className="material-symbols-outlined text-[18px] group-hover:scale-110 transition-transform">
+              forum
+            </span>
+            <span>Ir a Mensajes</span>
+            <span className="material-symbols-outlined text-[16px] transition-transform group-hover:translate-x-0.5">
+              arrow_forward
+            </span>
           </Link>
         </div>
-      </header>
+      </div>
 
-      {/* Grid de Métricas Reales */}
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {/* Conversaciones Totales */}
-        <article className="rounded-xl border border-line bg-panel/70 p-5 shadow-xl backdrop-blur-xl transition hover:border-slate-700">
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Card 1: Conversaciones Totales */}
+        <div className="bg-surface-container-low rounded-xl p-5 flex flex-col justify-between shadow-sm relative overflow-hidden group hover:bg-surface-container transition-all border border-surface-container-high/40">
           <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+            <div className="space-y-1">
+              <span className="text-[11px] font-bold uppercase text-outline tracking-wider block">
                 Conversaciones
-              </p>
-              <p className="mt-2 text-3xl font-bold text-white">
-                {loading ? "..." : stats.totalConversations}
-              </p>
+              </span>
+              <div className="flex items-baseline gap-2">
+                {loading ? (
+                  <span className="text-3xl font-bold text-on-surface tracking-tight">—</span>
+                ) : (
+                  <span className="text-3xl font-bold text-on-surface tracking-tight">
+                    {totalConvs}
+                  </span>
+                )}
+              </div>
             </div>
-            <span className="grid size-11 place-items-center rounded-xl bg-signal/10 text-signal border border-signal/20">
-              <MessageSquare className="size-5" />
-            </span>
+            <div className="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center text-primary group-hover:scale-105 transition-transform border border-primary/20">
+              <span className="material-symbols-outlined text-[20px]">chat_bubble</span>
+            </div>
           </div>
-          <p className="mt-4 flex items-center gap-1.5 text-xs text-slate-400">
-            <span className="text-signal font-semibold">{stats.totalMessages}</span>
-            <span>mensajes intercambiados</span>
-          </p>
-        </article>
+          <div className="mt-4 pt-3 flex items-center justify-between text-on-surface-variant text-xs border-t border-surface-container-high/40">
+            <span className="flex items-center gap-1.5 text-on-surface">
+              <span className="w-1.5 h-1.5 rounded-full bg-primary"></span>
+              En tiempo real
+            </span>
+            <span className="text-outline">Supabase RT</span>
+          </div>
+        </div>
 
-        {/* Atendidos por IA */}
-        <article className="rounded-xl border border-line bg-panel/70 p-5 shadow-xl backdrop-blur-xl transition hover:border-slate-700">
+        {/* Card 2: Atendidos por IA */}
+        <div className="bg-surface-container-low rounded-xl p-5 flex flex-col justify-between shadow-sm relative overflow-hidden group hover:bg-surface-container transition-all border border-surface-container-high/40">
           <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+            <div className="space-y-1">
+              <span className="text-[11px] font-bold uppercase text-outline tracking-wider block">
                 Atendidos por IA
-              </p>
-              <p className="mt-2 text-3xl font-bold text-signal">
-                {loading ? "..." : stats.aiActive}
-              </p>
+              </span>
+              <div className="flex items-baseline gap-2">
+                {loading ? (
+                  <span className="text-3xl font-bold text-primary tracking-tight">—</span>
+                ) : (
+                  <span className="text-3xl font-bold text-primary tracking-tight">
+                    {aiCount}
+                  </span>
+                )}
+                {!loading && totalConvs > 0 && (
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-primary/10 text-primary uppercase tracking-wide border border-primary/20">
+                    {aiPercentage}%
+                  </span>
+                )}
+              </div>
             </div>
-            <span className="grid size-11 place-items-center rounded-xl bg-signal/10 text-signal border border-signal/20">
-              <Bot className="size-5" />
+            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center text-primary group-hover:scale-105 transition-transform border border-primary/20">
+              <span className="material-symbols-outlined text-[20px]">smart_toy</span>
+            </div>
+          </div>
+          <div className="mt-4 pt-3 flex items-center justify-between text-on-surface-variant text-xs border-t border-surface-container-high/40">
+            <span className="flex items-center gap-1.5 text-secondary">
+              <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
+              Tasa de automatización
             </span>
           </div>
-          <p className="mt-4 flex items-center gap-1.5 text-xs text-slate-400">
-            <Sparkles className="size-3.5 text-signal" />
-            <span>{automationRate}% tasa de automatización</span>
-          </p>
-        </article>
+        </div>
 
-        {/* Leads Esperando Asesor */}
-        <article className="rounded-xl border border-line bg-panel/70 p-5 shadow-xl backdrop-blur-xl transition hover:border-slate-700">
+        {/* Card 3: Esperando Asesor */}
+        <div className="bg-surface-container-low rounded-xl p-5 flex flex-col justify-between shadow-sm relative overflow-hidden group hover:bg-surface-container transition-all border border-surface-container-high/40">
           <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+            <div className="space-y-1">
+              <span className="text-[11px] font-bold uppercase text-outline tracking-wider block">
                 Esperando Asesor
-              </p>
-              <p
-                className={`mt-2 text-3xl font-bold ${
-                  stats.waitingAgent > 0 ? "text-amber-300" : "text-white"
-                }`}
-              >
-                {loading ? "..." : stats.waitingAgent}
-              </p>
+              </span>
+              <div className="flex items-baseline gap-2">
+                {loading ? (
+                  <span className="text-3xl font-bold text-on-surface tracking-tight">—</span>
+                ) : (
+                  <span
+                    className={`text-3xl font-bold tracking-tight ${
+                      waitingCount > 0 ? "text-amber-300" : "text-on-surface"
+                    }`}
+                  >
+                    {waitingCount}
+                  </span>
+                )}
+                {!loading && (
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-surface-container-high text-on-surface-variant">
+                    {waitingCount === 0 ? "Óptimo" : "Pendiente"}
+                  </span>
+                )}
+              </div>
             </div>
-            <span
-              className={`grid size-11 place-items-center rounded-xl border ${
-                stats.waitingAgent > 0
-                  ? "bg-amber-500/10 text-amber-300 border-amber-500/30"
-                  : "bg-white/5 text-slate-400 border-line"
+            <div
+              className={`w-10 h-10 rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform ${
+                waitingCount > 0
+                  ? "bg-amber-400/10 text-amber-300 border border-amber-400/20"
+                  : "bg-surface-container-high text-outline"
               }`}
             >
-              <Clock className="size-5" />
-            </span>
+              <span className="material-symbols-outlined text-[20px]">hourglass_empty</span>
+            </div>
           </div>
-          <p className="mt-4 text-xs text-slate-400">
-            {stats.waitingAgent === 1
-              ? "1 prospecto solicita humano"
-              : `${stats.waitingAgent} prospectos solicitan humano`}
-          </p>
-        </article>
+          <div className="mt-4 pt-3 flex items-center justify-between text-on-surface-variant text-xs border-t border-surface-container-high/40">
+            <span className="text-on-surface-variant">En cola de handoff</span>
+          </div>
+        </div>
 
-        {/* Contactos Registrados */}
-        <article className="rounded-xl border border-line bg-panel/70 p-5 shadow-xl backdrop-blur-xl transition hover:border-slate-700">
+        {/* Card 4: Contactos Totales */}
+        <div className="bg-surface-container-low rounded-xl p-5 flex flex-col justify-between shadow-sm relative overflow-hidden group hover:bg-surface-container transition-all border border-surface-container-high/40">
           <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+            <div className="space-y-1">
+              <span className="text-[11px] font-bold uppercase text-outline tracking-wider block">
                 Contactos Totales
-              </p>
-              <p className="mt-2 text-3xl font-bold text-white">
-                {loading ? "..." : stats.totalContacts}
-              </p>
+              </span>
+              <div className="flex items-baseline gap-2">
+                {loading ? (
+                  <span className="text-3xl font-bold text-on-surface tracking-tight">—</span>
+                ) : (
+                  <span className="text-3xl font-bold text-on-surface tracking-tight">
+                    {totalContacts}
+                  </span>
+                )}
+                <span className="text-xs font-semibold text-primary flex items-center gap-0.5">
+                  <span className="material-symbols-outlined text-[14px]">done_all</span>
+                  Sync
+                </span>
+              </div>
             </div>
-            <span className="grid size-11 place-items-center rounded-xl bg-white/5 text-slate-300 border border-line">
-              <UsersRound className="size-5" />
-            </span>
+            <div className="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center text-secondary group-hover:scale-105 transition-transform">
+              <span className="material-symbols-outlined text-[20px]">contacts</span>
+            </div>
           </div>
-          <p className="mt-4 text-xs text-slate-400">
-            Directorio sincronizado de WhatsApp
-          </p>
-        </article>
-      </section>
+          <div className="mt-4 pt-3 flex items-center justify-between text-on-surface-variant text-xs border-t border-surface-container-high/40">
+            <span className="text-outline truncate">Base de datos Supabase</span>
+          </div>
+        </div>
+      </div>
 
-      {/* Contenido Principal: Conversaciones Recientes Reales */}
-      <section className="grid gap-6 xl:grid-cols-[1fr_340px]">
-        {/* Tabla en Vivo */}
-        <div className="overflow-hidden rounded-xl border border-line bg-panel/70 shadow-2xl backdrop-blur-xl">
-          <div className="flex items-center justify-between border-b border-line px-5 py-4">
+      {/* Operational Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Tabla de Conversaciones Recientes */}
+        <section className="lg:col-span-8 bg-surface-container-low rounded-xl shadow-sm flex flex-col overflow-hidden border border-surface-container-high/50">
+          {/* Header de la tabla */}
+          <div className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-surface-container-high/40">
             <div>
-              <h2 className="text-base font-semibold text-white">
-                Conversaciones Recientes de WhatsApp
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Historial sincronizado desde Meta Cloud API y Supabase.
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-semibold text-on-surface">
+                  Conversaciones Recientes
+                </h2>
+                {!loading && !isSupabaseMisconfigured && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-secondary/10 text-secondary text-[11px] font-bold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse"></span>
+                    En vivo
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-on-surface-variant mt-0.5">
+                WhatsApp Cloud API · Supabase Realtime
               </p>
             </div>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-signal/20 bg-signal/5 px-2.5 py-1 text-xs font-medium text-signal">
-              <span className="size-1.5 rounded-full bg-signal animate-ping" />
-              Sincronizado
-            </span>
+
+            {/* Input de Búsqueda */}
+            <div className="relative min-w-[240px]">
+              <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-outline">
+                search
+              </span>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Buscar contacto o mensaje..."
+                className="w-full pl-8 pr-3 py-1.5 bg-surface-container-high rounded-lg text-on-surface placeholder:text-outline text-xs focus:outline-none focus:ring-1 focus:ring-primary border border-transparent focus:border-primary/40 transition"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-outline hover:text-on-surface text-xs"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-white/[0.02] text-xs uppercase tracking-wider text-slate-400 border-b border-line">
+          {/* Tabla de datos */}
+          <div className="w-full overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-surface-container-high/60 text-outline uppercase text-[11px] font-bold tracking-wider">
                 <tr>
-                  <th className="px-5 py-3 font-medium">Contacto</th>
-                  <th className="px-5 py-3 font-medium">Último Mensaje</th>
-                  <th className="px-5 py-3 font-medium">Estado</th>
-                  <th className="px-5 py-3 font-medium">Fecha</th>
-                  <th className="px-5 py-3 font-medium text-right">Acción</th>
+                  <th className="py-3 px-4 font-semibold" scope="col">Contacto</th>
+                  <th className="py-3 px-4 font-semibold" scope="col">Último Mensaje</th>
+                  <th className="py-3 px-4 font-semibold" scope="col">Estado</th>
+                  <th className="py-3 px-4 font-semibold text-right" scope="col">Fecha / Hora</th>
+                  <th className="py-3 px-4 font-semibold text-center" scope="col">Acción</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-line">
-                {conversations.length === 0 ? (
+              <tbody className="divide-y divide-surface-container-high/30 text-on-surface">
+                {loading ? (
                   <tr>
-                    <td colSpan={5} className="px-5 py-10 text-center text-slate-400 text-sm">
-                      {loading ? "Cargando conversaciones..." : "No hay conversaciones registradas aún."}
+                    <td colSpan={5} className="py-12 text-center text-outline text-xs">
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="w-5 h-5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                        Conectando con Supabase...
+                      </div>
+                    </td>
+                  </tr>
+                ) : isSupabaseMisconfigured ? (
+                  <tr>
+                    <td colSpan={5} className="py-12 text-center">
+                      <div className="flex flex-col items-center gap-2">
+                        <span className="material-symbols-outlined text-[32px] text-outline">cloud_off</span>
+                        <p className="text-sm font-medium text-on-surface-variant">Sin conexión a Supabase</p>
+                        <p className="text-xs text-outline max-w-sm">
+                          Configura <code className="bg-surface-container-high px-1 rounded">.env.local</code> con tus credenciales reales para ver las conversaciones.
+                        </p>
+                      </div>
+                    </td>
+                  </tr>
+                ) : filteredConversations.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-12 text-center">
+                      <div className="flex flex-col items-center gap-2">
+                        <span className="material-symbols-outlined text-[32px] text-outline">
+                          {searchQuery || activeFilter !== "all" ? "search_off" : "inbox"}
+                        </span>
+                        <p className="text-sm text-outline">
+                          {searchQuery || activeFilter !== "all"
+                            ? "No se encontraron conversaciones con ese filtro"
+                            : "No hay conversaciones aún"}
+                        </p>
+                      </div>
                     </td>
                   </tr>
                 ) : (
-                  conversations.map((conv) => {
-                    const badge = getStatusBadge(conv.status);
-                    const contactName = conv.contacts?.name || "Cliente WhatsApp";
-                    const contactPhone = conv.contacts?.phone || "Sin número";
+                  filteredConversations.map((row) => {
+                    const avatarColorClass =
+                      row.avatarColor === "primary"
+                        ? "text-primary"
+                        : row.avatarColor === "secondary"
+                        ? "text-secondary"
+                        : row.avatarColor === "tertiary"
+                        ? "text-tertiary"
+                        : "text-outline";
 
                     return (
-                      <tr key={conv.id} className="hover:bg-white/[0.03] transition">
-                        <td className="px-5 py-4">
+                      <tr
+                        key={row.id}
+                        className="hover:bg-surface-container/60 transition-colors group"
+                      >
+                        <td className="py-3 px-4">
                           <div className="flex items-center gap-3">
-                            <span className="grid size-9 place-items-center rounded-lg bg-white/5 border border-line text-xs font-bold text-slate-200 uppercase">
-                              {contactName.substring(0, 2)}
-                            </span>
-                            <div>
-                              <p className="font-medium text-white">{contactName}</p>
-                              <p className="text-xs text-slate-400">{contactPhone}</p>
+                            <div
+                              className={`w-9 h-9 rounded-lg bg-surface-container-highest flex items-center justify-center text-xs font-bold border border-surface-container-high ${avatarColorClass}`}
+                            >
+                              {row.initials}
+                            </div>
+                            <div className="flex flex-col min-w-0">
+                              <span className="text-xs text-on-surface truncate font-semibold">
+                                {row.name}
+                              </span>
+                              {row.phone && (
+                                <span className="text-[11px] text-outline font-mono">
+                                  {row.phone}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </td>
-                        <td className="px-5 py-4 max-w-xs">
-                          <p className="truncate text-xs text-slate-300">
-                            {conv.last_message_preview || "Sin mensajes"}
+
+                        <td className="py-3 px-4 max-w-[220px]">
+                          <p className="truncate text-on-surface-variant text-xs">
+                            {row.lastMessage}
                           </p>
                         </td>
-                        <td className="px-5 py-4">
-                          <span
-                            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${badge.pill}`}
-                          >
-                            <badge.icon className="size-3.5" />
-                            {badge.label}
-                          </span>
+
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          {getStatusBadge(row.status)}
                         </td>
-                        <td className="px-5 py-4 text-xs text-slate-400 whitespace-nowrap">
-                          {formatDate(conv.last_message_at)}
+
+                        <td className="py-3 px-4 whitespace-nowrap text-right text-xs text-outline">
+                          <div className="text-on-surface-variant font-medium">{row.date}</div>
+                          <div className="font-mono text-[11px] text-outline">{row.time}</div>
                         </td>
-                        <td className="px-5 py-4 text-right">
+
+                        <td className="py-3 px-4 text-center whitespace-nowrap">
                           <Link
-                            href={`/chat?id=${conv.id}`}
-                            className="inline-flex items-center gap-1 rounded-lg border border-line bg-white/5 px-2.5 py-1.5 text-xs font-medium text-slate-200 transition hover:border-signal/40 hover:bg-signal/10 hover:text-signal"
+                            href={`/chat?id=${row.id}`}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-surface-container-high hover:bg-primary hover:text-on-primary text-on-surface text-xs font-semibold transition-all group-hover:shadow-sm"
                           >
-                            Abrir Chat
-                            <ArrowRight className="size-3" />
+                            <span>Abrir</span>
+                            <span className="material-symbols-outlined text-[14px]">
+                              arrow_forward
+                            </span>
                           </Link>
                         </td>
                       </tr>
@@ -384,92 +611,149 @@ export default function DashboardPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Footer de la tabla */}
+          <div className="p-4 bg-surface-container-high/30 flex flex-col sm:flex-row items-center justify-between gap-2 text-outline text-xs border-t border-surface-container-high/40">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+              <span>
+                {filteredConversations.length} de {totalConvs} conversaciones
+              </span>
+            </div>
+            {!isSupabaseMisconfigured && (
+              <button
+                onClick={() => loadData()}
+                className="flex items-center gap-1 text-outline hover:text-primary transition-colors"
+                type="button"
+              >
+                <span className="material-symbols-outlined text-[14px]">refresh</span>
+                Actualizar
+              </button>
+            )}
+          </div>
+        </section>
+
+        {/* Panel derecho */}
+        <div className="lg:col-span-4 space-y-5">
+          {/* Card: Distribución de estados */}
+          <div className="bg-surface-container-low rounded-xl p-5 shadow-sm space-y-4 border border-surface-container-high/50">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <h3 className="text-base font-semibold text-on-surface">
+                  Distribución de Estados
+                </h3>
+                <p className="text-xs text-outline">
+                  Desglose en tiempo real de la carga del CRM
+                </p>
+              </div>
+              <span className="w-8 h-8 rounded-lg bg-surface-container-high flex items-center justify-center text-primary">
+                <span className="material-symbols-outlined text-[18px]">pie_chart</span>
+              </span>
+            </div>
+
+            {/* Barra visual */}
+            {totalConvs > 0 ? (
+              <>
+                <div className="h-2.5 w-full bg-surface-container-highest rounded-full overflow-hidden flex">
+                  <div
+                    className="h-full bg-primary transition-all duration-500"
+                    style={{ width: `${aiPercentage}%` }}
+                    title={`${aiPercentage}% IA Autónoma`}
+                  />
+                  <div
+                    className="h-full bg-amber-400 transition-all duration-500"
+                    style={{ width: `${waitingPercentage}%` }}
+                    title={`${waitingPercentage}% Esperando Humano`}
+                  />
+                  <div
+                    className="h-full bg-sky-400 transition-all duration-500"
+                    style={{ width: `${humanPercentage}%` }}
+                    title={`${humanPercentage}% Intervención Humana`}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  {[
+                    { label: "IA Autónoma", count: aiCount, pct: aiPercentage, color: "bg-primary", textColor: "text-primary" },
+                    { label: "Esperando Asesor", count: waitingCount, pct: waitingPercentage, color: "bg-amber-400", textColor: "text-amber-300" },
+                    { label: "Asesor Activo", count: humanCount, pct: humanPercentage, color: "bg-sky-400", textColor: "text-sky-300" },
+                  ].map((seg) => (
+                    <div
+                      key={seg.label}
+                      className="flex items-center justify-between p-2 rounded-lg bg-surface-container-high/40"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2.5 h-2.5 rounded-full ${seg.color}`}></span>
+                        <span className="text-xs text-on-surface">{seg.label}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-on-surface font-mono">{seg.count}</span>
+                        <span className={`text-[11px] font-bold ${seg.textColor}`}>({seg.pct}%)</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="py-4 text-center text-outline text-xs">
+                {loading ? "Cargando datos..." : "Sin datos disponibles"}
+              </div>
+            )}
+          </div>
+
+          {/* Card: Accesos Rápidos */}
+          <div className="bg-surface-container-low rounded-xl p-5 shadow-sm space-y-3.5 border border-surface-container-high/50">
+            <div className="space-y-0.5">
+              <h3 className="text-base font-semibold text-on-surface">Accesos Rápidos</h3>
+              <p className="text-xs text-outline">Navegación directa a las secciones</p>
+            </div>
+            <div className="space-y-2">
+              {[
+                {
+                  href: "/chat",
+                  icon: "chat",
+                  label: "Bandeja de Mensajes",
+                  sub: "Conversaciones de WhatsApp en vivo",
+                  color: "text-primary",
+                },
+                {
+                  href: "/contactos",
+                  icon: "contact_page",
+                  label: "Directorio de Contactos",
+                  sub: `${totalContacts} contactos sincronizados`,
+                  color: "text-secondary",
+                },
+                {
+                  href: "/configuracion",
+                  icon: "settings",
+                  label: "Configuración del Sistema",
+                  sub: "Estado de servicios y prompts del bot",
+                  color: "text-tertiary",
+                },
+              ].map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="group flex items-center justify-between p-3 rounded-lg bg-surface-container hover:bg-surface-container-high transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-8 h-8 rounded-lg bg-surface-container-high flex items-center justify-center ${item.color} group-hover:scale-110 transition-transform`}>
+                      <span className="material-symbols-outlined text-[18px]">{item.icon}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-xs font-semibold text-on-surface">{item.label}</span>
+                      <span className="text-[11px] text-outline">{item.sub}</span>
+                    </div>
+                  </div>
+                  <span className="material-symbols-outlined text-[18px] text-outline group-hover:text-primary transition-colors">
+                    chevron_right
+                  </span>
+                </Link>
+              ))}
+            </div>
+          </div>
         </div>
-
-        {/* Panel Lateral de Estado Operativo */}
-        <aside className="space-y-4">
-          <div className="rounded-xl border border-line bg-panel/70 p-5 shadow-xl backdrop-blur-xl">
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-300">
-              Distribución de Leads
-            </h3>
-            <p className="mt-1 text-xs text-slate-400">
-              Desglose de la carga de trabajo actual del CRM.
-            </p>
-
-            <div className="mt-5 space-y-3">
-              <div className="flex items-center justify-between text-xs">
-                <span className="flex items-center gap-2 text-slate-300">
-                  <span className="size-2 rounded-full bg-signal" />
-                  Atención IA Autónoma
-                </span>
-                <span className="font-bold text-white">{stats.aiActive}</span>
-              </div>
-              <div className="h-1.5 w-full rounded-full bg-white/5 overflow-hidden">
-                <div
-                  className="h-full bg-signal transition-all duration-500"
-                  style={{
-                    width: `${stats.totalConversations > 0 ? (stats.aiActive / stats.totalConversations) * 100 : 0}%`,
-                  }}
-                />
-              </div>
-
-              <div className="flex items-center justify-between text-xs pt-2">
-                <span className="flex items-center gap-2 text-slate-300">
-                  <span className="size-2 rounded-full bg-amber-400" />
-                  Esperando Asesor Humano
-                </span>
-                <span className="font-bold text-white">{stats.waitingAgent}</span>
-              </div>
-              <div className="h-1.5 w-full rounded-full bg-white/5 overflow-hidden">
-                <div
-                  className="h-full bg-amber-400 transition-all duration-500"
-                  style={{
-                    width: `${stats.totalConversations > 0 ? (stats.waitingAgent / stats.totalConversations) * 100 : 0}%`,
-                  }}
-                />
-              </div>
-
-              <div className="flex items-center justify-between text-xs pt-2">
-                <span className="flex items-center gap-2 text-slate-300">
-                  <span className="size-2 rounded-full bg-sky-400" />
-                  Intervención Humana
-                </span>
-                <span className="font-bold text-white">{stats.humanTakeover}</span>
-              </div>
-              <div className="h-1.5 w-full rounded-full bg-white/5 overflow-hidden">
-                <div
-                  className="h-full bg-sky-400 transition-all duration-500"
-                  style={{
-                    width: `${stats.totalConversations > 0 ? (stats.humanTakeover / stats.totalConversations) * 100 : 0}%`,
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-line bg-panel/70 p-5 shadow-xl backdrop-blur-xl">
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-300">
-              Accesos Rápidos
-            </h3>
-            <div className="mt-3 space-y-2">
-              <Link
-                href="/contactos"
-                className="flex items-center justify-between rounded-lg border border-line bg-white/5 p-3 text-xs text-slate-300 hover:border-slate-600 hover:bg-white/10 transition"
-              >
-                <span>Ver Directorio de Contactos</span>
-                <UsersRound className="size-4 text-slate-400" />
-              </Link>
-              <Link
-                href="/configuracion"
-                className="flex items-center justify-between rounded-lg border border-line bg-white/5 p-3 text-xs text-slate-300 hover:border-slate-600 hover:bg-white/10 transition"
-              >
-                <span>Estado de Servicios y Prompts</span>
-                <Sparkles className="size-4 text-signal" />
-              </Link>
-            </div>
-          </div>
-        </aside>
-      </section>
+      </div>
     </div>
   );
 }
