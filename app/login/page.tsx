@@ -7,18 +7,17 @@ import {
   Lock,
   Mail,
   ShieldCheck,
-  Sparkles,
   Eye,
   EyeOff,
-  Zap,
   CheckCircle2,
   Database,
+  ArrowRight,
 } from "lucide-react";
 
 export default function LoginPage() {
-  const { login, loginAsSuperadmin } = useAuth();
-  const [email, setEmail] = useState("admin@salesbot.crm");
-  const [password, setPassword] = useState("admin123");
+  const { login } = useAuth();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,21 +39,6 @@ export default function LoginPage() {
     }
   };
 
-  const handleQuickSuperadmin = async () => {
-    setError(null);
-    setLoading(true);
-    try {
-      const res = await loginAsSuperadmin();
-      if (!res.success && res.error) {
-        setError(res.error);
-        setLoading(false);
-      }
-    } catch {
-      setError("Error al iniciar sesión con Supabase Auth.");
-      setLoading(false);
-    }
-  };
-
   return (
     <div className="relative min-h-screen flex items-center justify-center p-4 overflow-hidden bg-ink selection:bg-signal/30 selection:text-signal">
       {/* Luces de fondo y efectos ambientales */}
@@ -71,7 +55,7 @@ export default function LoginPage() {
         }}
       />
 
-      <div className="relative w-full max-w-xl">
+      <div className="relative w-full max-w-md">
         {/* Cabecera / Marca */}
         <div className="text-center mb-6">
           <div className="inline-flex items-center justify-center size-14 rounded-2xl border border-signal/40 bg-signal/10 shadow-glow mb-3">
@@ -87,19 +71,19 @@ export default function LoginPage() {
 
         {/* Tarjeta Principal de Login */}
         <div className="rounded-2xl border border-line bg-panel/85 p-6 sm:p-8 backdrop-blur-2xl shadow-2xl relative overflow-hidden">
-          {/* Badge superior de privilegios y Supabase */}
-          <div className="flex items-center justify-between pb-5 mb-5 border-b border-line">
+          {/* Header de la tarjeta */}
+          <div className="flex items-center justify-between pb-4 mb-5 border-b border-line">
             <div className="flex items-center gap-2">
               <span className="grid size-7 place-items-center rounded-lg bg-signal/15 text-signal border border-signal/30">
                 <ShieldCheck className="size-4" />
               </span>
               <div>
                 <p className="text-xs font-bold text-white uppercase tracking-wider">
-                  Acceso Super Administrador
+                  Acceso Restringido
                 </p>
                 <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
                   <Database className="size-3 text-sky-400" />
-                  <span>Almacenado y validado en Supabase Auth</span>
+                  <span>Validación estricta en Supabase Auth</span>
                 </div>
               </div>
             </div>
@@ -109,52 +93,22 @@ export default function LoginPage() {
             </span>
           </div>
 
-          {/* Botón de Acceso Instantáneo Superadmin en Supabase */}
-          <div className="mb-6">
-            <button
-              type="button"
-              id="quick-superadmin-login-btn"
-              onClick={handleQuickSuperadmin}
-              disabled={loading}
-              className="w-full group relative overflow-hidden rounded-xl border border-signal/60 bg-gradient-to-r from-signal/20 via-signal/30 to-emerald-400/20 px-4 py-3 text-sm font-bold text-white shadow-glow transition duration-200 hover:border-signal hover:shadow-[0_0_40px_rgba(55,242,154,0.3)] disabled:opacity-50"
-            >
-              <div className="flex items-center justify-center gap-2">
-                <Zap className="size-4 text-signal fill-signal transition group-hover:scale-110" />
-                <span>
-                  {loading ? "Validando en Supabase..." : "⚡ Entrar Directo con Todos los Permisos"}
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-300 font-normal mt-0.5">
-                Valida usuario y contraseña en Supabase Auth • Permisos Totales
-              </p>
-            </button>
-          </div>
-
-          {/* Divisor */}
-          <div className="relative my-5 text-center">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-line" />
-            </div>
-            <span className="relative bg-panel px-3 text-[11px] uppercase tracking-wider text-slate-400 font-medium">
-              o ingresa tus credenciales de Supabase
-            </span>
-          </div>
-
-          {/* Mensaje de error si existiera */}
+          {/* Mensaje de error si las credenciales son incorrectas */}
           {error && (
-            <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
-              {error}
+            <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300 flex items-start gap-2">
+              <span className="text-red-400 font-bold">✕</span>
+              <span>{error}</span>
             </div>
           )}
 
-          {/* Formulario de Login */}
+          {/* Formulario de Login Estricto */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label
                 htmlFor="email-input"
                 className="block text-xs font-medium text-slate-300 mb-1.5"
               >
-                Correo Electrónico (Registrado en Supabase)
+                Correo Electrónico
               </label>
               <div className="relative">
                 <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-slate-400" />
@@ -163,8 +117,9 @@ export default function LoginPage() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@salesbot.crm"
+                  placeholder="usuario@dominio.com"
                   required
+                  autoComplete="email"
                   className="w-full rounded-xl border border-line bg-ink/70 pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:border-signal/70 focus:outline-none focus:ring-1 focus:ring-signal/50 transition"
                 />
               </div>
@@ -175,7 +130,7 @@ export default function LoginPage() {
                 htmlFor="password-input"
                 className="block text-xs font-medium text-slate-300 mb-1.5"
               >
-                Contraseña en Supabase
+                Contraseña
               </label>
               <div className="relative">
                 <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-slate-400" />
@@ -186,6 +141,7 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
                   required
+                  autoComplete="current-password"
                   className="w-full rounded-xl border border-line bg-ink/70 pl-10 pr-10 py-2.5 text-sm text-white placeholder-slate-500 focus:border-signal/70 focus:outline-none focus:ring-1 focus:ring-signal/50 transition"
                 />
                 <button
@@ -202,44 +158,24 @@ export default function LoginPage() {
               type="submit"
               id="submit-login-btn"
               disabled={loading}
-              className="w-full rounded-xl border border-line bg-white/10 hover:bg-white/15 px-4 py-2.5 text-sm font-semibold text-white transition disabled:opacity-50 mt-2"
+              className="w-full group rounded-xl border border-signal/50 bg-signal/15 hover:bg-signal/25 px-4 py-3 text-sm font-semibold text-white shadow-glow transition disabled:opacity-50 mt-2 flex items-center justify-center gap-2"
             >
-              {loading ? "Verificando en Supabase..." : "Iniciar Sesión en Supabase"}
+              <span>{loading ? "Verificando en Supabase..." : "Iniciar Sesión"}</span>
+              <ArrowRight className="size-4 text-signal transition group-hover:translate-x-1" />
             </button>
           </form>
 
-          {/* Grilla de Permisos Concedidos */}
-          <div className="mt-6 pt-5 border-t border-line">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-1.5">
-              <Sparkles className="size-3.5 text-signal" />
-              Matriz de Permisos Activos del Usuario:
-            </p>
-            <div className="grid grid-cols-2 gap-2 text-xs text-slate-300">
-              <div className="flex items-center gap-1.5 bg-ink/40 p-2 rounded-lg border border-line">
-                <CheckCircle2 className="size-3.5 text-signal shrink-0" />
-                <span>Gestor de Chats & Handoff</span>
-              </div>
-              <div className="flex items-center gap-1.5 bg-ink/40 p-2 rounded-lg border border-line">
-                <CheckCircle2 className="size-3.5 text-signal shrink-0" />
-                <span>Meta WhatsApp Cloud API</span>
-              </div>
-              <div className="flex items-center gap-1.5 bg-ink/40 p-2 rounded-lg border border-line">
-                <CheckCircle2 className="size-3.5 text-signal shrink-0" />
-                <span>Agente IA Gemini 2.5</span>
-              </div>
-              <div className="flex items-center gap-1.5 bg-ink/40 p-2 rounded-lg border border-line">
-                <CheckCircle2 className="size-3.5 text-signal shrink-0" />
-                <span>Supabase DB & Contactos</span>
-              </div>
-            </div>
+          {/* Información de seguridad */}
+          <div className="mt-5 pt-4 border-t border-line text-center text-xs text-slate-400">
+            <p>Solo usuarios autorizados con cuenta activa en Supabase Auth pueden acceder al CRM.</p>
           </div>
         </div>
 
-        {/* Footer con info de seguridad */}
+        {/* Footer */}
         <div className="mt-4 flex items-center justify-center gap-4 text-[11px] text-slate-500">
           <span>🔒 Supabase Auth (Bcrypt)</span>
           <span>•</span>
-          <span>Sesión Segura</span>
+          <span>Acceso Protegido</span>
           <span>•</span>
           <span>Deploy AI Cockpit</span>
         </div>

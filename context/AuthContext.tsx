@@ -17,7 +17,6 @@ interface AuthContextType {
   loading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  loginAsSuperadmin: () => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   can: (permission: Permission) => boolean;
 }
@@ -57,11 +56,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(authUser);
           saveSession(authUser);
         } else {
-          // 2. Fallback a sesión guardada en localStorage
-          const local = loadSession();
-          if (local && mounted) {
-            setUser(local);
-          }
+          // Si no hay sesión válida en Supabase, limpiamos
+          clearSession();
+          if (mounted) setUser(null);
         }
       } catch (e) {
         console.error("Error al inicializar sesión de Supabase Auth:", e);
@@ -74,7 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     initSession();
 
-    // 3. Escuchar cambios de estado en Supabase Auth en tiempo real
+    // 2. Escuchar cambios de estado en Supabase Auth en tiempo real
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
@@ -96,43 +93,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (email: string, pass: string): Promise<{ success: boolean; error?: string }> => {
     if (!email.trim() || !pass.trim()) {
-      return { success: false, error: "Por favor ingresa correo y contraseña." };
+      return { success: false, error: "Por favor ingresa tu correo y contraseña." };
     }
 
     try {
-      // Autenticar contra Supabase Auth
+      // Autenticación estricta contra Supabase Auth
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password: pass.trim(),
       });
 
       if (error) {
-        // Si el usuario es el administrador y aún no ha sido sincronizado en Supabase, intentamos bootstrap automático
-        if (email.trim().toLowerCase() === "admin@salesbot.crm") {
-          try {
-            await fetch("/api/auth/bootstrap", { method: "POST" });
-            const retry = await supabase.auth.signInWithPassword({
-              email: email.trim(),
-              password: pass.trim(),
-            });
-            if (retry.data?.user) {
-              const authUser = mapSupabaseUserToAuthUser(retry.data.user);
-              saveSession(authUser);
-              setUser(authUser);
-              startTransition(() => {
-                router.push("/");
-                router.refresh();
-              });
-              return { success: true };
-            }
-          } catch {
-            // Continuar con el error original si falla bootstrap
-          }
-        }
-
         const msg =
           error.message === "Invalid login credentials"
-            ? "Credenciales incorrectas en Supabase Auth. Verifica tu correo y contraseña."
+            ? "Correo o contraseña incorrectos. Verifica tus datos de Supabase."
             : error.message;
         return { success: false, error: msg };
       }
@@ -150,17 +124,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { success: true };
       }
 
-      return { success: false, error: "No se pudo obtener información del usuario." };
+      return { success: false, error: "No se pudo obtener información del usuario desde Supabase." };
     } catch (err: any) {
       return {
         success: false,
-        error: err?.message || "Error al conectar con el servidor de Supabase Auth.",
+        error: err?.message || "Error al conectar con los servidores de Supabase Auth.",
       };
     }
-  };
-
-  const loginAsSuperadmin = async (): Promise<{ success: boolean; error?: string }> => {
-    return login("admin@salesbot.crm", "admin123");
   };
 
   const logout = async () => {
@@ -189,7 +159,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         isAuthenticated: !!user,
         login,
-        loginAsSuperadmin,
         logout,
         can,
       }}
