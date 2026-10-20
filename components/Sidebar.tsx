@@ -158,7 +158,7 @@ export function Sidebar() {
   const userInitials = userName.slice(0, 2).toUpperCase();
 
   return (
-    <aside className="fixed left-0 top-0 h-full w-72 bg-surface-container-lowest z-50 flex flex-col justify-between border-r border-surface-container-high/60 shadow-[0_1px_8px_rgba(0,0,0,0.4)]">
+    <aside className="hidden md:flex fixed left-0 top-0 h-full w-72 bg-surface-container-lowest z-50 flex-col justify-between border-r border-surface-container-high/60 shadow-[0_1px_8px_rgba(0,0,0,0.4)]">
       <div className="flex flex-col">
         {/* Header de la Marca */}
         <div className="p-5 border-b border-surface-container-high/40">

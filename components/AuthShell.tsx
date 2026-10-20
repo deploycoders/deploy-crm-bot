@@ -4,6 +4,7 @@ import React, { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { Sidebar } from "@/components/Sidebar";
+import { BottomNav } from "@/components/BottomNav";
 import { GlobalNotifications } from "@/components/GlobalNotifications";
 
 export function AuthShell({ children }: { children: React.ReactNode }) {
@@ -54,17 +55,65 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
 
   const userInitial = user?.name ? user.name.slice(0, 2).toUpperCase() : "JE";
 
+  // Determinar subtítulo para el header móvil
+  const getMobileSubtitle = () => {
+    if (pathname === "/") return "Dashboard";
+    if (pathname.startsWith("/chat")) return "Bandeja de Mensajes";
+    if (pathname.startsWith("/contactos")) return "Directorio de Contactos";
+    if (pathname.startsWith("/pipeline")) return "Flujos & Pipeline";
+    if (pathname.startsWith("/equipo")) return "Gestión de Equipo";
+    if (pathname.startsWith("/configuracion")) return "Configuración";
+    return "Deploy Cockpit";
+  };
+
   return (
     <>
       <GlobalNotifications />
       <div className="min-h-screen bg-background text-on-surface">
-        {/* Sidebar Fijo a la Izquierda */}
+        {/* Sidebar Fijo a la Izquierda en Pantallas Medianas/Grandes */}
         <Sidebar />
 
-        {/* Zona de contenido principal con espacio para el Sidebar */}
-        <div className="pl-72">
-          {/* Top Header Fijo */}
-          <header className="fixed top-0 left-72 right-0 h-16 bg-surface-container-lowest/80 backdrop-blur-xl border-b border-surface-container-high/40 z-40 flex items-center justify-between px-6">
+        {/* Zona de contenido principal adaptativa */}
+        <div className="pl-0 md:pl-72 transition-all">
+          {/* Header Mobile Sticky (Diseño de la Referencia) */}
+          <header className="md:hidden sticky top-0 z-40 bg-[#051424]/95 backdrop-blur-xl border-b border-[#1c2b3c]/80 px-4 py-2.5 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="size-8 rounded-lg bg-primary/10 border border-primary/25 flex items-center justify-center text-primary shadow-sm">
+                <span className="material-symbols-outlined text-[20px]">smart_toy</span>
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-sm text-on-surface tracking-tight">SalesBot CRM</span>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/30 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+                    LIVE
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-medium leading-none mt-0.5">
+                  {getMobileSubtitle()}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="size-9 rounded-full bg-surface-container-low border border-surface-container-high/60 flex items-center justify-center text-slate-300 hover:text-white transition-colors"
+                title="Notificaciones"
+              >
+                <span className="material-symbols-outlined text-[19px]">notifications</span>
+              </button>
+              <div
+                className="size-9 rounded-full bg-primary flex items-center justify-center text-[#003824] font-bold text-xs shadow-md"
+                title={user?.name || "Usuario"}
+              >
+                <span className="material-symbols-outlined text-[19px]">person</span>
+              </div>
+            </div>
+          </header>
+
+          {/* Top Header Fijo para Desktop */}
+          <header className="hidden md:flex fixed top-0 left-72 right-0 h-16 bg-surface-container-lowest/80 backdrop-blur-xl border-b border-surface-container-high/40 z-40 items-center justify-between px-6">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2 text-on-surface-variant">
                 <span className="material-symbols-outlined text-[18px] text-primary">terminal</span>
@@ -99,10 +148,13 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
           </header>
 
           {/* Main Area */}
-          <main className="relative pt-16 bg-background min-h-screen">
+          <main className="relative pt-0 md:pt-16 pb-20 md:pb-8 bg-background min-h-screen">
             {children}
           </main>
         </div>
+
+        {/* Barra de Navegación Inferior para Móviles (BottomNav) */}
+        <BottomNav />
       </div>
     </>
   );

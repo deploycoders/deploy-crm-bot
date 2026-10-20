@@ -24,11 +24,12 @@ export interface HandoffSummary {
 }
 
 // Modelos en orden de velocidad, disponibilidad y estabilidad
+// IMPORTANTE: Solo IDs de modelos válidos en Google AI Studio / Gemini API
 const GEMINI_MODELS = [
-  "gemini-3.1-flash-lite", // Máxima velocidad (<1s) y alta disponibilidad
-  "gemini-3.8-flash",      // Modelo avanzado recomendado
-  "gemini-3.7-flash",      // Modelo con razonamiento rápido
-  "gemini-3.5-flash",      // Fallback
+  "gemini-2.0-flash",               // Más rápido y disponible (recomendado)
+  "gemini-2.5-flash-preview-04-17", // Más capaz, preview
+  "gemini-1.5-flash",               // Fallback estable
+  "gemini-1.5-pro",                 // Último recurso si flash no está disponible
 ];
 
 async function callWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -74,7 +75,51 @@ async function callGeminiWithFallback(prompt: string, systemInstruction?: string
 }
 
 /**
- * Transcribe un audio o nota de voz de WhatsApp usando Google Gemini
+ * Normaliza el mimeType que llega de WhatsApp a uno que Gemini acepta.
+ *
+ * WhatsApp envía audios como:
+ *   - "audio/ogg; codecs=opus"  → lo convierte a "audio/ogg"
+ *   - "audio/opus"              → no soportado directamente, usar "audio/ogg"
+ *   - "audio/mp4"               → "audio/mp4" (aceptado)
+ *   - "audio/mpeg"              → "audio/mp3" (aceptado)
+ *
+ * Gemini acepta: audio/wav, audio/mp3, audio/aiff, audio/aac, audio/ogg, audio/flac
+ */
+function normalizeAudioMimeType(rawMime: string): string {
+  // Quitar parámetros como "; codecs=opus"
+  const base = rawMime.split(";")[0].trim().toLowerCase();
+
+  const mimeMap: Record<string, string> = {
+    "audio/opus":  "audio/ogg",   // Opus viene en contenedor OGG
+    "audio/mpeg":  "audio/mp3",
+    "audio/mp4":   "audio/mp4",
+    "audio/x-m4a": "audio/mp4",
+    "audio/m4a":   "audio/mp4",
+    "audio/ogg":   "audio/ogg",
+    "audio/wav":   "audio/wav",
+    "audio/wave":  "audio/wav",
+    "audio/flac":  "audio/flac",
+    "audio/aac":   "audio/aac",
+    "audio/aiff":  "audio/aiff",
+    "audio/x-aiff":"audio/aiff",
+  };
+
+  return mimeMap[base] ?? "audio/ogg"; // default a ogg para WhatsApp
+}
+
+/**
+ * Transcribe un audio o nota de voz de WhatsApp usando Google Gemini.
+ *
+ * Estrategia (en orden de preferencia):
+ *  1. Gemini Files API  → sube el archivo y lo referencia con fileData {}
+ *     (más robusto, soporta archivos grandes, estado PROCESSING manejado)
+ *  2. inlineData base64 → como fallback para archivos pequeños (<5MB)
+ *     (solo si la Files API falla)
+ *
+ * Modelos correctos para audio multimodal:
+ *  - gemini-2.5-flash-preview-04-17
+ *  - gemini-2.0-flash
+ *  - gemini-1.5-flash
  */
 export async function transcribeAudioWithGemini(
   audioBuffer: Buffer,
@@ -84,37 +129,134 @@ export async function transcribeAudioWithGemini(
     return "Nota de voz recibida (Gemini API key no configurada)";
   }
 
-  try {
-    const cleanMime = mimeType.split(";")[0].trim() || "audio/ogg";
+  const normalizedMime = normalizeAudioMimeType(mimeType);
+  const fileSizeKb = Math.round(audioBuffer.length / 1024);
+  console.log(`🎙️ Transcribiendo audio: ${fileSizeKb}KB, mimeType original="${mimeType}" → normalizado="${normalizedMime}"`);
 
-    const response = await callWithTimeout(
-      ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: [
-          {
-            inlineData: {
-              data: audioBuffer.toString("base64"),
-              mimeType: cleanMime,
-            },
-          },
-          {
-            text:
-              "Transcribe en español el contenido hablado en este audio o nota de voz de WhatsApp. " +
-              "Si el audio es inaudible o contiene solo ruido, indica brevemente lo que se logre captar. " +
-              "Devuelve ÚNICAMENTE el texto transcrito de forma limpia, sin saludos, sin explicaciones ni comillas.",
-          },
-        ],
+  // Modelos con soporte real de audio multimodal (en orden de disponibilidad)
+  const AUDIO_MODELS = [
+    "gemini-2.5-flash-preview-04-17",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+  ];
+
+  const TRANSCRIPTION_PROMPT =
+    "Transcribe en español el contenido hablado en este audio o nota de voz de WhatsApp. " +
+    "Si el audio es inaudible o contiene solo ruido, responde exactamente: [Audio inaudible]. " +
+    "Devuelve ÚNICAMENTE el texto transcrito, sin saludos, sin explicaciones, sin comillas adicionales.";
+
+  // ── Estrategia 1: Gemini Files API ───────────────────────────────────────
+  let uploadedFileName: string | null = null;
+  try {
+    console.log("🔼 [transcribe] Subiendo audio con Files API...");
+
+    // Convertir Buffer a Blob compatible con Node.js y TypeScript
+    const blob = new Blob([audioBuffer as any], { type: normalizedMime });
+
+    const uploadResult = await callWithTimeout(
+      ai.files.upload({
+        file: blob,
+        config: { mimeType: normalizedMime },
       }),
-      9000
+      15000
     );
 
-    const transcribed = response.text?.trim() || "";
-    return transcribed || "Nota de voz sin audio reconocible";
-  } catch (error) {
-    console.error("Error al transcribir audio con Gemini:", error);
-    return "Nota de voz recibida (no fue posible transcribir)";
+    uploadedFileName = uploadResult.name ?? null;
+    console.log(`✅ [transcribe] Archivo subido: ${uploadResult.uri}`);
+
+    // Esperar a que el archivo esté ACTIVE (max 10s)
+    let fileState = uploadResult;
+    let retries = 0;
+    while ((fileState as any).state === "PROCESSING" && retries < 5) {
+      await new Promise((r) => setTimeout(r, 2000));
+      fileState = await ai.files.get({ name: uploadResult.name! });
+      retries++;
+    }
+
+    if ((fileState as any).state === "FAILED") {
+      throw new Error("El archivo de audio falló al procesarse en Gemini Files API");
+    }
+
+    // Generar transcripción usando fileData (referencia al archivo subido)
+    for (const model of AUDIO_MODELS) {
+      try {
+        console.log(`🤖 [transcribe] Probando modelo ${model} con Files API...`);
+        const response = await callWithTimeout(
+          ai.models.generateContent({
+            model,
+            contents: [
+              { text: TRANSCRIPTION_PROMPT },
+              {
+                fileData: {
+                  fileUri: uploadResult.uri,
+                  mimeType: normalizedMime,
+                },
+              },
+            ] as any,
+          }),
+          12000
+        );
+
+        const text = response.text?.trim();
+        if (text && text.length > 0) {
+          console.log(`✅ [transcribe] Transcripción exitosa con ${model} (Files API): "${text.slice(0, 60)}..."`);
+          // Limpiar el archivo subido (fire-and-forget)
+          if (uploadedFileName) {
+            ai.files.delete({ name: uploadedFileName }).catch(() => {});
+          }
+          return text;
+        }
+      } catch (modelErr: any) {
+        console.warn(`⚠️ [transcribe] Modelo ${model} falló con Files API: ${modelErr?.message}`);
+        continue;
+      }
+    }
+  } catch (filesApiErr: any) {
+    console.warn(`⚠️ [transcribe] Files API falló: ${filesApiErr?.message}. Intentando con inlineData...`);
+    // Limpiar si se subió algo
+    if (uploadedFileName) {
+      ai.files.delete({ name: uploadedFileName }).catch(() => {});
+      uploadedFileName = null;
+    }
   }
+
+  // ── Estrategia 2: inlineData base64 (fallback para archivos pequeños) ───
+  if (audioBuffer.length <= 5 * 1024 * 1024) { // Solo para archivos <5MB
+    for (const model of AUDIO_MODELS) {
+      try {
+        console.log(`🤖 [transcribe] Probando modelo ${model} con inlineData...`);
+        const response = await callWithTimeout(
+          ai.models.generateContent({
+            model,
+            contents: [
+              { text: TRANSCRIPTION_PROMPT },
+              {
+                inlineData: {
+                  mimeType: normalizedMime,
+                  data: audioBuffer.toString("base64"),
+                },
+              },
+            ] as any,
+          }),
+          12000
+        );
+
+        const text = response.text?.trim();
+        if (text && text.length > 0) {
+          console.log(`✅ [transcribe] Transcripción exitosa con ${model} (inlineData): "${text.slice(0, 60)}..."`);
+          return text;
+        }
+      } catch (inlineErr: any) {
+        console.warn(`⚠️ [transcribe] Modelo ${model} falló con inlineData: ${inlineErr?.message}`);
+        continue;
+      }
+    }
+  }
+
+  console.error("❌ [transcribe] Todos los métodos de transcripción fallaron");
+  return "🎤 Nota de voz recibida (transcripción no disponible en este momento)";
 }
+
 
 /**
  * Genera una Ficha Ejecutiva de Transferencia (Handoff) para el asesor humano
