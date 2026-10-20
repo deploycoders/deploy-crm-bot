@@ -6,6 +6,13 @@ import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { playMessageChime, initAudio } from "@/lib/sound";
+import {
+  getNotificationPermission,
+  isPushEnabled,
+  requestNotificationPermission,
+  setPushEnabled,
+  supportsNotifications,
+} from "@/lib/notifications";
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -13,6 +20,8 @@ export function Sidebar() {
   const [handoffCount, setHandoffCount] = useState<number>(0);
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
+  const [pushNotifEnabled, setPushNotifEnabled] = useState<boolean>(false);
+  const [pushPermission, setPushPermission] = useState<ReturnType<typeof getNotificationPermission>>("unavailable");
 
   // Conteo real de conversaciones que requieren asesor humano
   const fetchHandoffCount = async () => {
@@ -51,6 +60,10 @@ export function Sidebar() {
     fetchHandoffCount();
     fetchUnreadCount();
 
+    // Init push state
+    setPushPermission(getNotificationPermission());
+    setPushNotifEnabled(isPushEnabled());
+
     const channel = supabase
       .channel("sidebar-realtime")
       .on(
@@ -76,6 +89,23 @@ export function Sidebar() {
     }
   };
 
+  const togglePush = async () => {
+    if (!supportsNotifications()) return;
+    if (!pushNotifEnabled) {
+      const granted = await requestNotificationPermission();
+      if (granted) {
+        setPushEnabled(true);
+        setPushNotifEnabled(true);
+        setPushPermission("granted");
+      } else {
+        setPushPermission(getNotificationPermission());
+      }
+    } else {
+      setPushEnabled(false);
+      setPushNotifEnabled(false);
+    }
+  };
+
   // Solo rutas que existen y tienen funcionalidad real
   const navItems = [
     {
@@ -91,6 +121,24 @@ export function Sidebar() {
       badge: unreadCount > 0 ? (unreadCount > 99 ? "99+" : unreadCount.toString()) : undefined,
       badgeClass: "bg-primary/15 text-primary border border-primary/20",
       activeMatch: (path: string) => path.startsWith("/chat"),
+    },
+    {
+      href: "/pipeline",
+      label: "Pipeline (Kanban)",
+      icon: "view_kanban",
+      activeMatch: (path: string) => path.startsWith("/pipeline"),
+    },
+    {
+      href: "/equipo",
+      label: "Equipo",
+      icon: "group",
+      activeMatch: (path: string) => path.startsWith("/equipo"),
+    },
+    {
+      href: "/admin/audit",
+      label: "Audit Log",
+      icon: "policy",
+      activeMatch: (path: string) => path.startsWith("/admin/audit"),
     },
     {
       href: "/contactos",
@@ -249,10 +297,32 @@ export function Sidebar() {
             </span>
             <span>Sonido {soundEnabled ? "ON" : "OFF"}</span>
           </button>
-          <div className="flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
-            <span>Supabase RT</span>
-          </div>
+          <button
+            onClick={togglePush}
+            type="button"
+            disabled={pushPermission === "denied"}
+            title={
+              pushPermission === "denied"
+                ? "Notificaciones bloqueadas en el navegador"
+                : pushNotifEnabled
+                ? "Desactivar notificaciones push"
+                : "Activar notificaciones push"
+            }
+            className={`flex items-center gap-1 transition-colors cursor-pointer ${
+              pushNotifEnabled
+                ? "text-primary"
+                : pushPermission === "denied"
+                ? "text-rose-400/60 cursor-not-allowed"
+                : "hover:text-primary"
+            }`}
+          >
+            <span className="material-symbols-outlined text-[13px]">
+              {pushNotifEnabled ? "notifications_active" : "notifications_off"}
+            </span>
+            <span className="hidden sm:inline">
+              {pushPermission === "denied" ? "Push OFF" : pushNotifEnabled ? "Push ON" : "Push"}
+            </span>
+          </button>
         </div>
       </div>
     </aside>

@@ -36,9 +36,121 @@ export async function sendWhatsAppMessage(toPhone: string, text: string) {
       return { success: false, error: data };
     }
 
-    return { success: true, data };
+    return {
+      success: true,
+      messageId: data.messages?.[0]?.id,
+      data,
+    };
   } catch (error) {
     console.error("Excepción al enviar mensaje a WhatsApp:", error);
+    return { success: false, error };
+  }
+}
+
+/**
+ * Envía una imagen a través de WhatsApp Cloud API
+ */
+export async function sendWhatsAppImage(
+  toPhone: string,
+  imageUrl: string,
+  caption?: string
+) {
+  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+  if (!token || !phoneNumberId) {
+    return { success: false, error: "Credenciales de WhatsApp no configuradas" };
+  }
+
+  const formattedPhone = toPhone.replace("+", "").trim();
+
+  try {
+    const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: formattedPhone,
+        type: "image",
+        image: {
+          link: imageUrl,
+          caption: caption || undefined,
+        },
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      console.error("Error al enviar imagen por WhatsApp:", data);
+      return { success: false, error: data };
+    }
+
+    return {
+      success: true,
+      messageId: data.messages?.[0]?.id,
+      data,
+    };
+  } catch (error) {
+    console.error("Excepción enviando imagen a WhatsApp:", error);
+    return { success: false, error };
+  }
+}
+
+/**
+ * Envía un documento o PDF a través de WhatsApp Cloud API
+ */
+export async function sendWhatsAppDocument(
+  toPhone: string,
+  documentUrl: string,
+  filename: string,
+  caption?: string
+) {
+  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+  if (!token || !phoneNumberId) {
+    return { success: false, error: "Credenciales de WhatsApp no configuradas" };
+  }
+
+  const formattedPhone = toPhone.replace("+", "").trim();
+
+  try {
+    const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: formattedPhone,
+        type: "document",
+        document: {
+          link: documentUrl,
+          caption: caption || undefined,
+          filename: filename || "documento.pdf",
+        },
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      console.error("Error al enviar documento por WhatsApp:", data);
+      return { success: false, error: data };
+    }
+
+    return {
+      success: true,
+      messageId: data.messages?.[0]?.id,
+      data,
+    };
+  } catch (error) {
+    console.error("Excepción enviando documento a WhatsApp:", error);
     return { success: false, error };
   }
 }

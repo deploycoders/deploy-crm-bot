@@ -62,7 +62,18 @@ export async function POST(request: NextRequest) {
       const changes = entry.changes || [];
       for (const change of changes) {
         const value = change.value;
-        if (!value || !value.messages) continue;
+        if (!value) continue;
+
+        // Procesar confirmaciones de entrega y lectura (statuses)
+        if (value.statuses && Array.isArray(value.statuses)) {
+          for (const statusUpdate of value.statuses) {
+            console.log(
+              `📡 Estado WhatsApp: Mensaje ${statusUpdate.id} -> ${statusUpdate.status} (Destinatario: ${statusUpdate.recipient_id})`
+            );
+          }
+        }
+
+        if (!value.messages) continue;
 
         const contactProfile = value.contacts?.[0];
         const contactName = contactProfile?.profile?.name || "Cliente WhatsApp";

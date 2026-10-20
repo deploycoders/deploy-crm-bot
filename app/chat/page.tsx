@@ -2,29 +2,52 @@
 
 import { useEffect, useState, useRef, useMemo } from "react";
 import {
+  AlertCircle,
   ArrowDown,
   ArrowLeft,
   ArrowUp,
   Bot,
   Check,
+  CheckCheck,
   ChevronDown,
   ChevronUp,
   ExternalLink,
+  FileText,
+  Image as ImageIcon,
   Info,
   MessageSquare,
   MessageSquarePlus,
+  Paperclip,
   Phone,
   RotateCcw,
   Search,
   Send,
   ShieldCheck,
   Sparkles,
+  Tag,
   UserRound,
   X,
   Zap,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { cleanJsonArtifacts } from "@/lib/ai";
+import { getQuickReplies, QuickReply } from "@/lib/quickReplies";
+import { CRM_TAGS, getAllTagsMap, toggleLeadTag } from "@/lib/tags";
+import {
+  CRM_AGENTS,
+  CRMAgent,
+  getAllAssignmentsMap,
+  assignLeadAgent,
+  getAgentById,
+} from "@/lib/agents";
+import {
+  notifyIncomingMessage,
+  notifyHandoff,
+  isPushEnabled,
+} from "@/lib/notifications";
+import { createAuditor } from "@/lib/audit";
+import { useAuth } from "@/context/AuthContext";
+import { rateLimit, resetRateLimit } from "@/lib/permissions";
 
 interface Contact {
   id: string;
@@ -54,12 +77,19 @@ interface Message {
 type FilterStatus = "all" | "waiting_agent" | "ai_active" | "human_takeover";
 
 export default function ChatPage() {
+  const { user } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+
+  // Auditor pre-configurado con el usuario actual
+  const audit = createAuditor(
+    user?.id ?? "unknown",
+    user?.name ?? "Asesor"
+  );
 
   // Mobile state navigation: "list" (lista de chats) o "chat" (chat activo)
   const [mobileView, setMobileView] = useState<"list" | "chat">("list");
@@ -73,6 +103,25 @@ export default function ChatPage() {
   // Notas del asesor por contacto (guardadas en localStorage)
   const [advisorNotes, setAdvisorNotes] = useState<Record<string, string>>({});
 
+  // Etiquetas de Leads (CRM Tags)
+  const [leadTagsMap, setLeadTagsMap] = useState<Record<string, string[]>>({});
+
+  // Asignaciones de Asesor por lead (guardadas en localStorage)
+  const [assignmentsMap, setAssignmentsMap] = useState<Record<string, string>>({});
+  const [showAgentPicker, setShowAgentPicker] = useState(false);
+
+  // Respuestas Rápidas (Snippets y Atajos con /)
+  const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
+  const [showQuickRepliesMenu, setShowQuickRepliesMenu] = useState(false);
+
+  // Modal / Envío de Multimedia (Imágenes y Documentos/PDF)
+  const [showMediaModal, setShowMediaModal] = useState(false);
+  const [mediaType, setMediaType] = useState<"image" | "document">("image");
+  const [mediaUrl, setMediaUrl] = useState("");
+  const [mediaFilename, setMediaFilename] = useState("");
+  const [mediaCaption, setMediaCaption] = useState("");
+  const [sendingMedia, setSendingMedia] = useState(false);
+
   // Control de scroll y visibilidad de botones
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
@@ -81,6 +130,20 @@ export default function ChatPage() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const activeConversation = conversations.find((c) => c.id === selectedId);
+
+  // Cargar respuestas rápidas
+  useEffect(() => {
+    setQuickReplies(getQuickReplies());
+  }, []);
+
+  // Comprobar si la conversación está fuera de la ventana de 24 horas de Meta
+  const isOutside24HoursWindow = useMemo(() => {
+    if (!activeConversation || !activeConversation.last_message_at) return false;
+    const lastMsgTime = new Date(activeConversation.last_message_at).getTime();
+    const now = Date.now();
+    const hoursDifference = (now - lastMsgTime) / (1000 * 60 * 60);
+    return hoursDifference > 24;
+  }, [activeConversation]);
 
   // Detectar la posición del scroll para mostrar botones de ayuda
   const handleMessagesScroll = () => {
@@ -125,7 +188,7 @@ export default function ChatPage() {
     scrollToBottom();
   }, [messages]);
 
-  // Cargar notas desde localStorage
+  // Cargar notas y tags desde localStorage
   useEffect(() => {
     try {
       const saved = localStorage.getItem("crm_advisor_notes");
@@ -135,7 +198,20 @@ export default function ChatPage() {
     } catch {
       // Ignorar si no está disponible
     }
+    setLeadTagsMap(getAllTagsMap());
+    setAssignmentsMap(getAllAssignmentsMap());
   }, []);
+
+  const handleToggleTag = (contactId: string, tagId: string) => {
+    const updated = toggleLeadTag(contactId, tagId);
+    setLeadTagsMap((prev) => ({ ...prev, [contactId]: updated }));
+  };
+
+  const handleAssignAgent = (contactId: string, agentId: string) => {
+    assignLeadAgent(contactId, agentId);
+    setAssignmentsMap((prev) => ({ ...prev, [contactId]: agentId }));
+    setShowAgentPicker(false);
+  };
 
   const handleSaveNote = (contactId: string, text: string) => {
     const updated = { ...advisorNotes, [contactId]: text };
@@ -239,6 +315,19 @@ export default function ChatPage() {
           if (newMsg.conversation_id === selectedId) {
             setMessages((prev) => [...prev, newMsg]);
           }
+          // Notificación push si el mensaje es del cliente y no es la conv activa
+          if (
+            newMsg.sender === "client" &&
+            newMsg.conversation_id !== selectedId
+          ) {
+            const conv = conversations.find(
+              (c) => c.id === newMsg.conversation_id
+            );
+            const contactName =
+              conv?.contacts?.name || conv?.contacts?.phone || "Cliente";
+            const preview = newMsg.content?.slice(0, 80) || "Nuevo mensaje";
+            notifyIncomingMessage(contactName, preview, newMsg.conversation_id);
+          }
           fetchConversations();
         }
       )
@@ -250,6 +339,13 @@ export default function ChatPage() {
           setConversations((prev) =>
             prev.map((c) => (c.id === updatedConv.id ? { ...c, ...updatedConv } : c))
           );
+          // Notificación push si una conv pasó a waiting_agent
+          if (updatedConv.status === "waiting_agent") {
+            const conv = conversations.find((c) => c.id === updatedConv.id);
+            const contactName =
+              conv?.contacts?.name || conv?.contacts?.phone || "Lead";
+            notifyHandoff(contactName, updatedConv.id);
+          }
         }
       )
       .subscribe();
@@ -257,12 +353,16 @@ export default function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedId]);
+  }, [selectedId, conversations]);
 
   // 4. Enviar mensaje como asesor humano
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputText.trim() || !selectedId || sending) return;
+
+    // Rate limiting cliente (anti-doble-click)
+    const rlKey = `send:${selectedId}`;
+    if (!rateLimit(rlKey, 800)) return;
 
     const textToSend = inputText.trim();
     setInputText("");
@@ -275,21 +375,76 @@ export default function ChatPage() {
         body: JSON.stringify({
           conversationId: selectedId,
           text: textToSend,
+          agentId: user?.id ?? "unknown",
+          agentName: user?.name ?? "Asesor",
         }),
       });
 
       if (!res.ok) {
-        console.error("Error al enviar mensaje vía API");
+        const errData = await res.json().catch(() => ({}));
+        console.error("Error al enviar mensaje vía API:", errData);
+        resetRateLimit(rlKey); // Permitir retry inmediato si falla
+      } else {
+        // Auditar el envío
+        audit("agent:message_sent", {
+          conversationId: selectedId,
+          metadata: { preview: textToSend.slice(0, 80) },
+        });
       }
 
       await fetchMessages(selectedId);
       await fetchConversations();
     } catch (err: unknown) {
       console.error("Error al enviar mensaje:", err);
+      resetRateLimit(rlKey);
     } finally {
       setSending(false);
-      // Mantener el foco en el input en móvil para escribir rápido
       inputRef.current?.focus();
+    }
+  };
+
+  // Seleccionar e insertar una respuesta rápida
+  const handleSelectQuickReply = (reply: QuickReply) => {
+    setInputText(reply.text);
+    setShowQuickRepliesMenu(false);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 50);
+  };
+
+  // Enviar multimedia (Imagen o Documento) por WhatsApp
+  const handleSendMedia = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mediaUrl.trim() || !selectedId || sendingMedia) return;
+
+    setSendingMedia(true);
+    try {
+      const res = await fetch("/api/chat/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId: selectedId,
+          type: mediaType,
+          mediaUrl: mediaUrl.trim(),
+          filename: mediaFilename.trim() || undefined,
+          text: mediaCaption.trim() || undefined,
+        }),
+      });
+
+      if (res.ok) {
+        setShowMediaModal(false);
+        setMediaUrl("");
+        setMediaCaption("");
+        setMediaFilename("");
+        await fetchMessages(selectedId);
+        await fetchConversations();
+      } else {
+        alert("Error al enviar archivo por WhatsApp");
+      }
+    } catch (err) {
+      console.error("Error enviando media:", err);
+    } finally {
+      setSendingMedia(false);
     }
   };
 
@@ -314,6 +469,16 @@ export default function ChatPage() {
             ? "El asesor ha tomado el control manual de la conversación."
             : "Se ha reactivado la atención automática con Inteligencia Artificial.",
       });
+
+      // Auditar el cambio de estado
+      audit(
+        newStatus === "human_takeover" ? "agent:takeover" : "agent:handover_to_ai",
+        {
+          conversationId: activeConversation.id,
+          contactId: activeConversation.contact_id,
+          metadata: { previousStatus: activeConversation.status, newStatus },
+        }
+      );
 
       fetchConversations();
       fetchMessages(activeConversation.id);
@@ -567,6 +732,37 @@ export default function ChatPage() {
                           </span>
                         )}
                       </div>
+
+                      {/* Badges de etiquetas asignadas */}
+                      {leadTagsMap[chat.contact_id] && leadTagsMap[chat.contact_id].length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {leadTagsMap[chat.contact_id].map((tagId) => {
+                            const tagDef = CRM_TAGS.find((t) => t.id === tagId);
+                            if (!tagDef) return null;
+                            return (
+                              <span
+                                key={tagDef.id}
+                                className={`rounded px-1.5 py-0.5 text-[9px] font-medium border ${tagDef.bgClass} ${tagDef.textClass} ${tagDef.borderClass}`}
+                              >
+                                {tagDef.name}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Badge de asesor asignado */}
+                      {assignmentsMap[chat.contact_id] && assignmentsMap[chat.contact_id] !== "unassigned" && (() => {
+                        const agent = getAgentById(assignmentsMap[chat.contact_id]);
+                        return (
+                          <div className="mt-1 flex items-center gap-1">
+                            <span className={`text-[9px] font-medium ${agent.textClass}`}>
+                              {agent.avatar}
+                            </span>
+                            <span className="text-[9px] text-slate-500">{agent.name}</span>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </button>
                 );
@@ -807,9 +1003,16 @@ export default function ChatPage() {
                                   {isBot ? "Bot IA" : isAgent ? "Tú (Asesor)" : "Cliente"}
                                 </span>
                               </span>
-                              <span className="text-[10px] text-slate-500 font-normal">
-                                {formatMessageTime(message.created_at)}
-                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] text-slate-500 font-normal">
+                                  {formatMessageTime(message.created_at)}
+                                </span>
+                                {isAgent && (
+                                  <span title="Entregado por WhatsApp" className="text-sky-300 inline-flex items-center">
+                                    <CheckCheck className="size-3 text-sky-400" />
+                                  </span>
+                                )}
+                              </div>
                             </div>
 
                             {/* Contenido del Mensaje limpio de artefactos JSON si los hubiera */}
@@ -853,32 +1056,133 @@ export default function ChatPage() {
               </div>
 
               {/* Barra de Entrada Pinned al fondo */}
-              <div className="border-t border-line bg-panel/95 p-2.5 sm:p-3 shrink-0">
+              {/* Barra de Entrada Pinned al fondo */}
+              <div className="relative border-t border-line bg-panel/95 p-2.5 sm:p-3 shrink-0">
+                {/* Popover Flotante de Respuestas Rápidas */}
+                {showQuickRepliesMenu && (
+                  <div className="absolute bottom-16 left-3 right-3 sm:left-4 sm:right-auto sm:w-96 rounded-2xl border border-signal/40 bg-panel/95 p-3 shadow-2xl backdrop-blur-xl z-30 space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-150">
+                    <div className="flex items-center justify-between border-b border-line pb-2">
+                      <div className="flex items-center gap-1.5">
+                        <Zap className="size-3.5 text-amber-400" />
+                        <span className="text-xs font-bold text-white">Respuestas Rápidas (Snippets)</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowQuickRepliesMenu(false)}
+                        className="text-slate-400 hover:text-white"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    </div>
+                    <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+                      {quickReplies.map((qr) => (
+                        <button
+                          key={qr.id}
+                          type="button"
+                          onClick={() => handleSelectQuickReply(qr)}
+                          className="w-full text-left rounded-xl border border-line/60 bg-ink/60 p-2.5 hover:border-signal/50 hover:bg-white/5 transition group"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-white group-hover:text-signal transition">
+                              {qr.title}
+                            </span>
+                            <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] text-signal font-semibold">
+                              {qr.shortcut}
+                            </span>
+                          </div>
+                          <p className="mt-1 line-clamp-2 text-[11px] text-slate-400 leading-snug">
+                            {qr.text}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Alerta de Ventana de 24 Horas de WhatsApp */}
+                {isOutside24HoursWindow && (
+                  <div className="mb-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-200 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <AlertCircle className="size-3.5 text-amber-400 shrink-0" />
+                      <span>⚠️ Fuera de ventana de 24h de WhatsApp. El cliente debe escribir o debes enviar una plantilla.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setInputText(
+                          "¡Hola! Un gusto saludarte nuevamente desde Deploy 🚀. ¿En qué podemos colaborar con tu proyecto hoy?"
+                        )
+                      }
+                      className="text-[10px] font-bold underline text-amber-300 hover:text-white shrink-0 ml-2"
+                    >
+                      Cargar Saludo
+                    </button>
+                  </div>
+                )}
+
                 {activeConversation.status === "ai_active" && (
                   <p className="mb-1.5 px-1 text-[11px] text-amber-300/90 flex items-center gap-1.5">
                     <span className="size-1.5 rounded-full bg-amber-400" />
                     El Bot está activo. Al responder tomarás el control manual como asesor.
                   </p>
                 )}
-                <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+
+                <form onSubmit={handleSendMessage} className="flex items-center gap-1.5 sm:gap-2">
+                  {/* Botón Respuestas Rápidas ⚡ */}
+                  <button
+                    type="button"
+                    onClick={() => setShowQuickRepliesMenu(!showQuickRepliesMenu)}
+                    className={`grid size-9 sm:size-10 shrink-0 place-items-center rounded-xl border transition active:scale-95 ${
+                      showQuickRepliesMenu
+                        ? "border-amber-400 bg-amber-400/20 text-amber-300 shadow-glow"
+                        : "border-line bg-white/5 text-slate-400 hover:text-white hover:bg-white/10"
+                    }`}
+                    title="Respuestas Rápidas (Atajos con /)"
+                    aria-label="Abrir respuestas rápidas"
+                  >
+                    <Zap className="size-4 text-amber-400" />
+                  </button>
+
+                  {/* Botón Adjuntar Multimedia 📎 */}
+                  <button
+                    type="button"
+                    onClick={() => setShowMediaModal(true)}
+                    className="grid size-9 sm:size-10 shrink-0 place-items-center rounded-xl border border-line bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 transition active:scale-95"
+                    title="Enviar Imagen o Documento PDF"
+                    aria-label="Adjuntar archivo multimedia"
+                  >
+                    <Paperclip className="size-4" />
+                  </button>
+
+                  {/* Input de Texto */}
                   <div className="flex min-w-0 flex-1 items-center rounded-xl border border-line bg-ink/70 px-3 py-1.5 focus-within:border-signal/50 transition">
                     <input
                       ref={inputRef}
                       type="text"
                       value={inputText}
-                      onChange={(e) => setInputText(e.target.value)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setInputText(val);
+                        if (val.startsWith("/")) {
+                          setShowQuickRepliesMenu(true);
+                        } else if (showQuickRepliesMenu && !val.includes("/")) {
+                          setShowQuickRepliesMenu(false);
+                        }
+                      }}
                       placeholder={
                         activeConversation.status === "ai_active"
-                          ? "Escribe para intervenir y responder..."
-                          : "Escribe tu respuesta como asesor..."
+                          ? "Escribe para intervenir o '/' para respuestas rápidas..."
+                          : "Escribe tu respuesta o '/' para snippets..."
                       }
-                      className="min-w-0 flex-1 bg-transparent text-sm sm:text-sm text-white placeholder:text-slate-500 outline-none"
+                      className="min-w-0 flex-1 bg-transparent text-xs sm:text-sm text-white placeholder:text-slate-500 outline-none"
                     />
                   </div>
+
+                  {/* Botón Enviar */}
                   <button
                     type="submit"
                     disabled={!inputText.trim() || sending}
-                    className="grid size-10 shrink-0 place-items-center rounded-xl bg-signal font-semibold text-ink shadow-glow transition hover:bg-emerald-300 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+                    className="grid size-9 sm:size-10 shrink-0 place-items-center rounded-xl bg-signal font-semibold text-ink shadow-glow transition hover:bg-emerald-300 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
                     aria-label="Enviar mensaje"
                   >
                     {sending ? (
@@ -888,6 +1192,117 @@ export default function ChatPage() {
                     )}
                   </button>
                 </form>
+
+                {/* Modal para Enviar Archivo Multimedia */}
+                {showMediaModal && (
+                  <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm animate-in fade-in duration-150">
+                    <div className="w-full max-w-md rounded-2xl border border-line bg-panel p-5 shadow-2xl space-y-4">
+                      <div className="flex items-center justify-between border-b border-line pb-3">
+                        <div className="flex items-center gap-2">
+                          <Paperclip className="size-4 text-signal" />
+                          <h3 className="text-sm font-bold text-white">Enviar Archivo a WhatsApp</h3>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShowMediaModal(false)}
+                          className="text-slate-400 hover:text-white"
+                        >
+                          <X className="size-4" />
+                        </button>
+                      </div>
+
+                      <form onSubmit={handleSendMedia} className="space-y-3 text-xs">
+                        {/* Selector de Tipo: Imagen o Documento */}
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setMediaType("image")}
+                            className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl border py-2 font-semibold transition ${
+                              mediaType === "image"
+                                ? "border-signal bg-signal/15 text-signal"
+                                : "border-line bg-white/5 text-slate-400 hover:text-white"
+                            }`}
+                          >
+                            <ImageIcon className="size-4" />
+                            <span>Imagen (JPG/PNG)</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setMediaType("document")}
+                            className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl border py-2 font-semibold transition ${
+                              mediaType === "document"
+                                ? "border-signal bg-signal/15 text-signal"
+                                : "border-line bg-white/5 text-slate-400 hover:text-white"
+                            }`}
+                          >
+                            <FileText className="size-4" />
+                            <span>Documento (PDF)</span>
+                          </button>
+                        </div>
+
+                        {/* URL del archivo */}
+                        <div className="space-y-1">
+                          <label className="text-slate-300 font-medium">URL pública del archivo</label>
+                          <input
+                            type="url"
+                            required
+                            value={mediaUrl}
+                            onChange={(e) => setMediaUrl(e.target.value)}
+                            placeholder={
+                              mediaType === "image"
+                                ? "https://ejemplo.com/cotizacion.jpg"
+                                : "https://ejemplo.com/propuesta.pdf"
+                            }
+                            className="w-full rounded-xl border border-line bg-ink/70 px-3 py-2 text-white placeholder:text-slate-500 outline-none focus:border-signal/50"
+                          />
+                        </div>
+
+                        {/* Nombre del archivo (solo si es documento) */}
+                        {mediaType === "document" && (
+                          <div className="space-y-1">
+                            <label className="text-slate-300 font-medium">Nombre del archivo</label>
+                            <input
+                              type="text"
+                              value={mediaFilename}
+                              onChange={(e) => setMediaFilename(e.target.value)}
+                              placeholder="Propuesta_Comercial_Deploy.pdf"
+                              className="w-full rounded-xl border border-line bg-ink/70 px-3 py-2 text-white placeholder:text-slate-500 outline-none focus:border-signal/50"
+                            />
+                          </div>
+                        )}
+
+                        {/* Mensaje o Pie de Foto (Caption) */}
+                        <div className="space-y-1">
+                          <label className="text-slate-300 font-medium">Mensaje adjunto (opcional)</label>
+                          <textarea
+                            rows={2}
+                            value={mediaCaption}
+                            onChange={(e) => setMediaCaption(e.target.value)}
+                            placeholder="Adjunto la propuesta solicitada para tu revisión..."
+                            className="w-full rounded-xl border border-line bg-ink/70 p-2.5 text-white placeholder:text-slate-500 outline-none focus:border-signal/50 resize-none"
+                          />
+                        </div>
+
+                        <div className="flex justify-end gap-2 pt-2 border-t border-line">
+                          <button
+                            type="button"
+                            onClick={() => setShowMediaModal(false)}
+                            className="rounded-xl border border-line bg-white/5 px-4 py-2 font-medium text-slate-300 hover:bg-white/10"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={!mediaUrl.trim() || sendingMedia}
+                            className="rounded-xl bg-signal px-4 py-2 font-bold text-ink hover:bg-emerald-300 transition disabled:opacity-50"
+                          >
+                            {sendingMedia ? "Enviando..." : "Enviar a WhatsApp"}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+                )}
               </div>
             </>
           ) : (
@@ -967,6 +1382,112 @@ export default function ChatPage() {
                     <Zap className="size-3.5 text-amber-400" />
                     {activeConversation.status === "ai_active" ? "Tomar control" : "Activar IA"}
                   </button>
+                </div>
+              </div>
+
+              {/* Asesor Asignado */}
+              <div className="rounded-xl border border-line bg-white/[0.04] p-4">
+                <div className="flex items-center justify-between mb-2.5">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <UserRound className="size-3.5 text-signal" />
+                    Asesor Asignado
+                  </h3>
+                  <button
+                    onClick={() => setShowAgentPicker((v) => !v)}
+                    className="text-[10px] text-slate-500 hover:text-signal transition"
+                  >
+                    {showAgentPicker ? "Cerrar" : "Cambiar"}
+                  </button>
+                </div>
+
+                {/* Asesor actual */}
+                {(() => {
+                  const agentId = assignmentsMap[activeConversation.contact_id] || "unassigned";
+                  const agent = getAgentById(agentId);
+                  return (
+                    <div
+                      className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${agent.bgClass} ${agent.borderClass}`}
+                    >
+                      <span className={`text-xs font-bold ${agent.textClass}`}>
+                        {agent.avatar}
+                      </span>
+                      <div className="min-w-0">
+                        <p className={`text-xs font-semibold ${agent.textClass}`}>
+                          {agent.name}
+                        </p>
+                        <p className="text-[10px] text-slate-500">{agent.role}</p>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Selector de asesor */}
+                {showAgentPicker && (
+                  <div className="mt-2 space-y-1">
+                    {CRM_AGENTS.map((agent) => {
+                      const isCurrent =
+                        (assignmentsMap[activeConversation.contact_id] || "unassigned") === agent.id;
+                      return (
+                        <button
+                          key={agent.id}
+                          onClick={() =>
+                            handleAssignAgent(activeConversation.contact_id, agent.id)
+                          }
+                          className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition ${
+                            isCurrent
+                              ? `${agent.bgClass} ${agent.textClass} ${agent.borderClass} font-semibold`
+                              : "border-line/60 bg-white/[0.02] text-slate-400 hover:text-white hover:bg-white/[0.06]"
+                          }`}
+                        >
+                          <span className="font-bold w-5 text-center">
+                            {agent.avatar}
+                          </span>
+                          <span>{agent.name}</span>
+                          {agent.role !== "—" && (
+                            <span className="ml-auto text-[10px] text-slate-500">
+                              {agent.role}
+                            </span>
+                          )}
+                          {isCurrent && <Check className="size-3 shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Etiquetas CRM (Tags del Lead) */}
+              <div className="rounded-xl border border-line bg-white/[0.04] p-4">
+                <div className="flex items-center justify-between mb-2.5">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <Tag className="size-3.5 text-signal" />
+                    Etiquetas CRM
+                  </h3>
+                  <span className="text-[10px] text-slate-500">Haz clic para asignar</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {CRM_TAGS.map((tag) => {
+                    const currentTags = leadTagsMap[activeConversation.contact_id] || [];
+                    const isAssigned = currentTags.includes(tag.id);
+                    return (
+                      <button
+                        key={tag.id}
+                        onClick={() => handleToggleTag(activeConversation.contact_id, tag.id)}
+                        className={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium border transition ${
+                          isAssigned
+                            ? `${tag.bgClass} ${tag.textClass} ${tag.borderClass} shadow-sm ring-1 ring-white/10 font-semibold`
+                            : "border-line/60 bg-white/[0.02] text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]"
+                        }`}
+                      >
+                        <span
+                          className="size-1.5 rounded-full"
+                          style={{ backgroundColor: tag.color }}
+                        />
+                        <span>{tag.name}</span>
+                        {isAssigned && <Check className="size-3 ml-0.5" />}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1084,6 +1605,38 @@ export default function ChatPage() {
                 ? "Tomar control manual (Pausar IA)"
                 : "Reactivar atención por IA"}
             </button>
+
+            {/* Etiquetas CRM en Drawer Móvil */}
+            <div className="border-t border-line/50 pt-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2 flex items-center gap-1.5">
+                <Tag className="size-3.5 text-signal" />
+                Etiquetas CRM
+              </h4>
+              <div className="flex flex-wrap gap-1.5">
+                {CRM_TAGS.map((tag) => {
+                  const currentTags = leadTagsMap[activeConversation.contact_id] || [];
+                  const isAssigned = currentTags.includes(tag.id);
+                  return (
+                    <button
+                      key={tag.id}
+                      onClick={() => handleToggleTag(activeConversation.contact_id, tag.id)}
+                      className={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium border transition ${
+                        isAssigned
+                          ? `${tag.bgClass} ${tag.textClass} ${tag.borderClass} font-semibold`
+                          : "border-line/60 bg-white/[0.02] text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      <span
+                        className="size-1.5 rounded-full"
+                        style={{ backgroundColor: tag.color }}
+                      />
+                      <span>{tag.name}</span>
+                      {isAssigned && <Check className="size-3 ml-0.5" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             {/* Notas del Asesor */}
             <div className="border-t border-line/50 pt-3">

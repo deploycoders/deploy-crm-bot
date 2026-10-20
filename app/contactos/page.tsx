@@ -4,13 +4,17 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
+  Download,
   MessageSquare,
   Phone,
   Search,
+  Tag,
   UserCheck,
   UsersRound,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { CRM_TAGS, getAllTagsMap } from "@/lib/tags";
+import { exportLeadsToCSV } from "@/lib/export";
 
 interface ContactItem {
   id: string;
@@ -29,9 +33,12 @@ export default function ContactosPage() {
   const [contacts, setContacts] = useState<ContactItem[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [loading, setLoading] = useState(true);
+  const [tagsMap, setTagsMap] = useState<Record<string, string[]>>({});
 
   const fetchContacts = async () => {
     try {
+      setTagsMap(getAllTagsMap());
+
       // 1. Obtener contactos
       const { data: contactsData, error: contactsError } = await supabase
         .from("contacts")
@@ -74,6 +81,22 @@ export default function ContactosPage() {
     return nameMatch || phoneMatch;
   });
 
+  const handleExportCSV = () => {
+    const exportable = filteredContacts.map((c) => ({
+      id: c.id,
+      name: c.name,
+      phone: c.phone,
+      status: c.conversation?.status || "Sin conversación",
+      lastMessage: c.conversation?.last_message_preview,
+      lastMessageAt: c.conversation?.last_message_at,
+      createdAt: c.created_at,
+      tags: (tagsMap[c.id] || []).map(
+        (tId) => CRM_TAGS.find((t) => t.id === tId)?.name || tId
+      ),
+    }));
+    exportLeadsToCSV(exportable, `Contactos_Deploy_CRM_${new Date().toISOString().slice(0, 10)}.csv`);
+  };
+
   const formatDate = (dateStr: string) => {
     if (!dateStr) return "-";
     return new Date(dateStr).toLocaleDateString("es-ES", {
@@ -101,16 +124,29 @@ export default function ContactosPage() {
           </p>
         </div>
 
-        {/* Buscador */}
-        <div className="relative w-full sm:w-72">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Buscar por nombre o teléfono..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full rounded-lg border border-line bg-panel/80 pl-9 pr-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-signal/50 focus:outline-none"
-          />
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Buscador */}
+          <div className="relative w-full sm:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Buscar por nombre o teléfono..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full rounded-xl border border-line bg-panel/80 pl-9 pr-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-signal/50 focus:outline-none"
+            />
+          </div>
+
+          {/* Botón Exportar */}
+          <button
+            type="button"
+            onClick={handleExportCSV}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-signal px-3.5 py-2 text-xs font-bold text-ink shadow-glow transition hover:bg-emerald-300 active:scale-95"
+            title="Exportar directorio a Excel / CSV"
+          >
+            <Download className="size-3.5" />
+            <span>Exportar CSV</span>
+          </button>
         </div>
       </header>
 
