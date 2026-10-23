@@ -31,12 +31,11 @@ export interface HandoffSummary {
 }
 
 // Modelos en orden de velocidad, disponibilidad y estabilidad
-// IMPORTANTE: Solo IDs de modelos válidos en Google AI Studio / Gemini API
 const GEMINI_MODELS = [
   "gemini-2.0-flash",               // Más rápido y disponible (recomendado)
   "gemini-2.5-flash-preview-04-17", // Más capaz, preview
   "gemini-1.5-flash",               // Fallback estable
-  "gemini-1.5-pro",                 // Último recurso si flash no está disponible
+  "gemini-1.5-pro",                 // Último recurso
 ];
 
 async function callWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -88,50 +87,30 @@ async function callGeminiWithFallback(prompt: string, systemInstruction?: string
 
 /**
  * Normaliza el mimeType que llega de WhatsApp a uno que Gemini acepta.
- *
- * WhatsApp envía audios como:
- *   - "audio/ogg; codecs=opus"  → lo convierte a "audio/ogg"
- *   - "audio/opus"              → no soportado directamente, usar "audio/ogg"
- *   - "audio/mp4"               → "audio/mp4" (aceptado)
- *   - "audio/mpeg"              → "audio/mp3" (aceptado)
- *
- * Gemini acepta: audio/wav, audio/mp3, audio/aiff, audio/aac, audio/ogg, audio/flac
  */
 function normalizeAudioMimeType(rawMime: string): string {
-  // Quitar parámetros como "; codecs=opus"
   const base = rawMime.split(";")[0].trim().toLowerCase();
 
   const mimeMap: Record<string, string> = {
-    "audio/opus":  "audio/ogg",   // Opus viene en contenedor OGG
-    "audio/mpeg":  "audio/mp3",
-    "audio/mp4":   "audio/mp4",
+    "audio/opus": "audio/ogg",
+    "audio/mpeg": "audio/mp3",
+    "audio/mp4": "audio/mp4",
     "audio/x-m4a": "audio/mp4",
-    "audio/m4a":   "audio/mp4",
-    "audio/ogg":   "audio/ogg",
-    "audio/wav":   "audio/wav",
-    "audio/wave":  "audio/wav",
-    "audio/flac":  "audio/flac",
-    "audio/aac":   "audio/aac",
-    "audio/aiff":  "audio/aiff",
-    "audio/x-aiff":"audio/aiff",
+    "audio/m4a": "audio/mp4",
+    "audio/ogg": "audio/ogg",
+    "audio/wav": "audio/wav",
+    "audio/wave": "audio/wav",
+    "audio/flac": "audio/flac",
+    "audio/aac": "audio/aac",
+    "audio/aiff": "audio/aiff",
+    "audio/x-aiff": "audio/aiff",
   };
 
-  return mimeMap[base] ?? "audio/ogg"; // default a ogg para WhatsApp
+  return mimeMap[base] ?? "audio/ogg";
 }
 
 /**
  * Transcribe un audio o nota de voz de WhatsApp usando Google Gemini.
- *
- * Estrategia (en orden de preferencia):
- *  1. Gemini Files API  → sube el archivo y lo referencia con fileData {}
- *     (más robusto, soporta archivos grandes, estado PROCESSING manejado)
- *  2. inlineData base64 → como fallback para archivos pequeños (<5MB)
- *     (solo si la Files API falla)
- *
- * Modelos correctos para audio multimodal:
- *  - gemini-2.5-flash-preview-04-17
- *  - gemini-2.0-flash
- *  - gemini-1.5-flash
  */
 export async function transcribeAudioWithGemini(
   audioBuffer: Buffer,
@@ -146,7 +125,6 @@ export async function transcribeAudioWithGemini(
   const fileSizeKb = Math.round(audioBuffer.length / 1024);
   console.log(`🎙️ Transcribiendo audio: ${fileSizeKb}KB, mimeType original="${mimeType}" → normalizado="${normalizedMime}"`);
 
-  // Modelos con soporte real de audio multimodal (en orden de disponibilidad)
   const AUDIO_MODELS = [
     "gemini-2.5-flash-preview-04-17",
     "gemini-2.0-flash",
@@ -158,12 +136,8 @@ export async function transcribeAudioWithGemini(
     "Si el audio es inaudible o contiene solo ruido, responde exactamente: [Audio inaudible]. " +
     "Devuelve ÚNICAMENTE el texto transcrito, sin saludos, sin explicaciones, sin comillas adicionales.";
 
-  // ── Estrategia 1: Gemini Files API ───────────────────────────────────────
   let uploadedFileName: string | null = null;
   try {
-    console.log("🔼 [transcribe] Subiendo audio con Files API...");
-
-    // Convertir Buffer a Blob compatible con Node.js y TypeScript
     const blob = new Blob([audioBuffer as any], { type: normalizedMime });
 
     const uploadResult = await callWithTimeout(
@@ -175,9 +149,7 @@ export async function transcribeAudioWithGemini(
     );
 
     uploadedFileName = uploadResult.name ?? null;
-    console.log(`✅ [transcribe] Archivo subido: ${uploadResult.uri}`);
 
-    // Esperar a que el archivo esté ACTIVE (max 10s)
     let fileState = uploadResult;
     let retries = 0;
     while ((fileState as any).state === "PROCESSING" && retries < 5) {
@@ -190,10 +162,8 @@ export async function transcribeAudioWithGemini(
       throw new Error("El archivo de audio falló al procesarse en Gemini Files API");
     }
 
-    // Generar transcripción usando fileData (referencia al archivo subido)
     for (const model of AUDIO_MODELS) {
       try {
-        console.log(`🤖 [transcribe] Probando modelo ${model} con Files API...`);
         const response = await callWithTimeout(
           ai.models.generateContent({
             model,
@@ -212,32 +182,25 @@ export async function transcribeAudioWithGemini(
 
         const text = response.text?.trim();
         if (text && text.length > 0) {
-          console.log(`✅ [transcribe] Transcripción exitosa con ${model} (Files API): "${text.slice(0, 60)}..."`);
-          // Limpiar el archivo subido (fire-and-forget)
           if (uploadedFileName) {
-            ai.files.delete({ name: uploadedFileName }).catch(() => {});
+            ai.files.delete({ name: uploadedFileName }).catch(() => { });
           }
           return text;
         }
-      } catch (modelErr: any) {
-        console.warn(`⚠️ [transcribe] Modelo ${model} falló con Files API: ${modelErr?.message}`);
+      } catch {
         continue;
       }
     }
-  } catch (filesApiErr: any) {
-    console.warn(`⚠️ [transcribe] Files API falló: ${filesApiErr?.message}. Intentando con inlineData...`);
-    // Limpiar si se subió algo
+  } catch {
     if (uploadedFileName) {
-      ai.files.delete({ name: uploadedFileName }).catch(() => {});
+      ai.files.delete({ name: uploadedFileName }).catch(() => { });
       uploadedFileName = null;
     }
   }
 
-  // ── Estrategia 2: inlineData base64 (fallback para archivos pequeños) ───
-  if (audioBuffer.length <= 5 * 1024 * 1024) { // Solo para archivos <5MB
+  if (audioBuffer.length <= 5 * 1024 * 1024) {
     for (const model of AUDIO_MODELS) {
       try {
-        console.log(`🤖 [transcribe] Probando modelo ${model} con inlineData...`);
         const response = await callWithTimeout(
           ai.models.generateContent({
             model,
@@ -256,17 +219,14 @@ export async function transcribeAudioWithGemini(
 
         const text = response.text?.trim();
         if (text && text.length > 0) {
-          console.log(`✅ [transcribe] Transcripción exitosa con ${model} (inlineData): "${text.slice(0, 60)}..."`);
           return text;
         }
-      } catch (inlineErr: any) {
-        console.warn(`⚠️ [transcribe] Modelo ${model} falló con inlineData: ${inlineErr?.message}`);
+      } catch {
         continue;
       }
     }
   }
 
-  console.error("❌ [transcribe] Todos los métodos de transcripción fallaron");
   return "🎤 Nota de voz recibida (transcripción no disponible en este momento)";
 }
 
@@ -338,118 +298,45 @@ Genera una ficha ejecutiva de transferencia para el asesor humano en formato JSO
 }
 
 /**
- * Motor conversacional de respaldo inteligente cuando la IA no está disponible o falla
- * Maneja temas fuera de alcance, selección de opciones y pedidos de asesor con fluidez
+ * Motor conversacional de respaldo inteligente cuando la IA no está disponible
  */
 export function getIntelligentFallback(newMessage: string): AIResponse {
   const text = (newMessage || "").toLowerCase().trim();
 
-  // 1. Detección de temas ajenos a tecnología o software (mascotas, perros, comida, medicina, etc.)
+  // 1. Temas ajenos o triviales obvios
   if (
-    /perr[oa]|mascota|animal|adop|veterinar|cachorr|medic[oa]|salud|enferm|receta|comida|restaurante|abogad[oa]|zapat[oa]|ropa/i.test(
+    /receta|cocina|perr[oa]|mascota|animal|veterinar|medic[oa]|salud|enferm|abogad[oa]|zapat[oa]|ropa|politica|faram|receta/i.test(
       text
     )
   ) {
     return {
       replyText:
-        "¡Hola! 👋 En *Deploy* nos dedicamos **exclusivamente al desarrollo de software y soluciones tecnológicas** (páginas web, chatbots con IA para WhatsApp y automatizaciones empresariales) 🚀.\n\nActualmente no ofrecemos ni gestionamos servicios ajenos a la tecnología como el que mencionas. ¿Tienes algún requerimiento digital, sitio web o bot en el que te podamos apoyar?",
+        "Soy el asistente virtual de Deploy y estoy especializado exclusivamente en nuestras soluciones tecnológicas y desarrollo de software. ¿Tienes algún proyecto digital o requerimiento en el que te pueda ayudar?",
       requestHandoff: false,
     };
   }
 
-  // 2. Opción 2 o Consulta de Servicios
+  // 2. Solicitud directa de asesor / contratación / precios complejos
   if (
-    text === "2" ||
-    text.startsWith("2.") ||
-    text.includes("servicio") ||
-    text.includes("desarrollo") ||
-    text.includes("web") ||
-    text.includes("landing") ||
-    text.includes("chatbot") ||
-    text.includes("bot") ||
-    text.includes("automatiz")
-  ) {
-    return {
-      replyText:
-        "🚀 *Servicios y Soluciones Tecnológicas en Deploy:*\n\n" +
-        "• 🌐 *Desarrollo Web & Landing Pages:* Páginas web de alto impacto, ultra rápidas y enfocadas en conversión.\n" +
-        "• 🤖 *Chatbots de WhatsApp con IA:* Asistentes inteligentes 24/7 conectados a tu CRM y WhatsApp Cloud API.\n" +
-        "• ⚙️ *Automatizaciones & Cloud:* Integraciones a medida (APIs, AppSheet) y despliegue en la nube.\n\n" +
-        "¿Te gustaría que un asesor comercial revise tu proyecto o deseas más detalles de algún servicio en particular?",
-      requestHandoff: false,
-    };
-  }
-
-  // 3. Opción 1 o FAQs
-  if (
-    text === "1" ||
-    text.startsWith("1.") ||
-    text.includes("faq") ||
-    text.includes("pregunta") ||
-    text.includes("pago") ||
-    text.includes("tiempo")
-  ) {
-    return {
-      replyText:
-        "📋 *Preguntas Frecuentes (FAQ) - Deploy:*\n\n" +
-        "• *Modalidad de Trabajo:* Metodología ágil con entregas por fases.\n" +
-        "• *Tiempos:* Landing pages listas entre 3 y 7 días hábiles según el requerimiento.\n" +
-        "• *Formas de Pago:* Pago Móvil, transferencias bancarias nacionales, Binance Pay (USDT) y divisas en efectivo.\n\n" +
-        "¿Deseas que te conectemos con un asesor para cotizar un requerimiento específico?",
-      requestHandoff: false,
-    };
-  }
-
-  // 4. Opción 3 o Soporte
-  if (
-    text === "3" ||
-    text.startsWith("3.") ||
-    text.includes("soporte") ||
-    text.includes("incidencia") ||
-    text.includes("falla") ||
-    text.includes("problema") ||
-    text.includes("error")
-  ) {
-    return {
-      replyText:
-        "🛠️ *Soporte Técnico Especializado - Deploy:*\n\n" +
-        "Brindamos mantenimiento preventivo, corrección de incidencias y monitoreo de sistemas activos de Deploy.\n\n" +
-        "Por favor descríbenos brevemente la situación o escribe *4* para transferirte con un técnico humano.",
-      requestHandoff: false,
-    };
-  }
-
-  // 5. Opción 4 o Asesor / Cotización / Precios (Handoff automático)
-  if (
-    text === "4" ||
-    text.startsWith("4.") ||
     text.includes("asesor") ||
     text.includes("humano") ||
     text.includes("persona") ||
-    text.includes("cotiz") ||
-    text.includes("precio") ||
-    text.includes("costo") ||
-    text.includes("presupuesto") ||
-    text.includes("contratar")
+    text.includes("contratar") ||
+    text.includes("precio exacto") ||
+    text.includes("cotización personalizada")
   ) {
     return {
       replyText:
-        "¡Con mucho gusto! 🤝 Te estoy transfiriendo en este momento con uno de nuestros asesores comerciales para darte una atención personalizada y revisar los requerimientos de tu proyecto.",
+        "¡Con mucho gusto! 🤝 Te estoy transfiriendo en este momento con uno de nuestros asesores comerciales para atender tu requerimiento de forma personalizada.",
       requestHandoff: true,
-      handoffReason: "Solicitud directa de asesor o cotización",
+      handoffReason: "Solicitud directa de atención comercial o contratación",
     };
   }
 
-  // 6. Saludo inicial o petición de menú explícito
+  // 3. Respuesta estándar de respaldo
   return {
     replyText:
-      "¡Hola! 👋 Bienvenido a *Deploy*. Somos especialistas en desarrollo de software, sitios web y chatbots con Inteligencia Artificial.\n\n" +
-      "📌 *¿En qué te podemos colaborar hoy?*\n" +
-      "1️⃣ *FAQ:* Preguntas frecuentes y formas de pago\n" +
-      "2️⃣ *Servicios:* Desarrollo web, chatbots y automatizaciones\n" +
-      "3️⃣ *Soporte:* Incidencias y diagnóstico técnico\n" +
-      "4️⃣ *Asesor:* Conectar con un especialista humano\n\n" +
-      "*(Escribe el número de la opción que prefieras o cuéntanos tu proyecto)* 🚀",
+      "¡Hola! 👋 Bienvenido a *Deploy*. Somos especialistas en desarrollo de software, páginas web y chatbots con Inteligencia Artificial.\n\n¿En qué te podemos colaborar hoy o qué proyecto tecnológico tienes en mente?",
     requestHandoff: false,
   };
 }
@@ -459,7 +346,7 @@ export async function generateAIResponse(
   newMessage: string
 ): Promise<AIResponse> {
   if (!isGeminiKeyConfigured()) {
-    console.warn("ℹ️ GEMINI_API_KEY no configurada o es placeholder. Respondiendo mediante motor inteligente integrado.");
+    console.warn("ℹ️ GEMINI_API_KEY no configurada. Respondiendo mediante motor inteligente integrado.");
     return getIntelligentFallback(newMessage);
   }
 
@@ -473,14 +360,34 @@ export async function generateAIResponse(
 Historial de la conversación reciente:
 ${formattedHistory}
 
-Mensaje(s) reciente(s) recibido(s) del cliente (pueden ser varios acumulados):
+Mensaje(s) reciente(s) recibido(s) del cliente:
 "${newMessage}"
 
-INSTRUCCIONES CLAVE DE ATENCIÓN:
-1. FLUIDEZ Y NATURALIDAD: Sé empático, ágil, humano y profesional. Responde directamente a lo que el cliente plantea de forma fluida.
-2. NUNCA REPITAS EL MENÚ EN CADA MENSAJE: Si el cliente ya eligió una opción o está conversando, responde directamente al tema seleccionado y formula una pregunta de seguimiento para avanzar. NO copies y pegues el menú de opciones (1, 2, 3, 4) a menos que el cliente explícitamente escriba 'menú' o sea el primer mensaje de la conversación.
-3. ESTRICTO ALCANCE DE DEPLOY: En Deploy nos dedicamos EXCLUSIVAMENTE al desarrollo de software y tecnología (sitios web, chatbots con IA para WhatsApp, automatizaciones y soporte en la nube). Si el cliente pregunta por un tema ajeno (ej: adoptar o comprar perros/animales, medicina, comida, etc.), aclara con respeto y cortesía que en Deploy solo ofrecemos soluciones tecnológicas y desarrollo de software, y pregunta si tiene alguna necesidad tecnológica para su negocio.
-4. Genera la respuesta en el formato JSON indicado.`;
+INSTRUCCIONES DE COMPORTAMIENTO Y FILTRADO COMERCIAL:
+
+1. FUENTE DE INFORMACIÓN Y VERACIDAD:
+- Utiliza como fuente principal la información oficial de Deploy proporcionada en tus instrucciones de sistema y configuración dinámica.
+- Nunca inventes precios, direcciones, horarios, enlaces ni políticas de la empresa. Si no conoces un dato específico, indícalo con naturalidad u ofrece la transferencia al asesor cuando corresponda.
+
+2. LÍMITES DE TEMA Y CONSULTAS AJENAS:
+- Si la pregunta no guarda una relación razonable con Deploy, sus servicios o un proyecto tecnológico (ej: recetas de cocina, tareas escolares, política, mascotas, medicina), evítala con cortesía y brevedad.
+- Indica que eres el asistente de Deploy especializado en soluciones tecnológicas e invita al usuario a consultar sobre los servicios de la empresa. No actúes como un buscador web general.
+
+3. CONTEXTO Y FLUIDEZ:
+- Lee el historial antes de contestar. Mantén el hilo de la conversación (ej: si pregunta "¿y cuánto tarda?", identifica el servicio del que hablaban).
+- No repitas saludos, presentaciones ni menús completos en cada mensaje a menos que el usuario lo pida o sea el primer contacto.
+
+4. ATENCIÓN COMERCIAL Y TRANSFERENCIA (HANDOFF):
+- Si el cliente muestra intención clara de contratar, solicita un presupuesto personalizado que requiera intervención humana, o pide hablar con un asesor real, activa "requestHandoff": true y redacta un handoffReason breve.
+- Si la consulta puede resolverse con información disponible (ej: servicios generales, horarios, ubicación), respóndela directamente sin transferir obligatoriamente.
+
+5. FORMATO DE SALIDA OBLIGATORIO:
+Devuelve exclusivamente un objeto JSON válido, sin Markdown, sin bloques de código y sin texto fuera del JSON, con la estructura exacta:
+{
+  "replyText": "Respuesta que recibirá el cliente por WhatsApp",
+  "requestHandoff": false,
+  "handoffReason": null
+}`;
 
     const text = await callGeminiWithFallback(prompt);
 
@@ -491,25 +398,18 @@ INSTRUCCIONES CLAVE DE ATENCIÓN:
   }
 }
 
-/**
- * Limpia y extrae la respuesta del bot sin filtrar estructuras JSON técnicas
- */
 export function cleanJsonArtifacts(text: string): string {
   if (!text) return "";
   let s = text.trim();
 
-  // Si tiene bloque de código markdown tipo ```json
   s = s.replace(/```json/gi, "").replace(/```/g, "").trim();
 
-  // Si contiene el patrón de JSON crudo {"replyText": ...}
   if (s.includes('"replyText"')) {
-    // Intentar regex para capturar el valor de replyText multilínea
     const regex = /"replyText"\s*:\s*"([\s\S]*?)"(?:\s*,\s*"requestHandoff"|\s*,\s*"handoffReason"|\s*})/i;
     const match = s.match(regex);
     if (match && match[1]) {
       s = match[1];
     } else {
-      // Remover prefijo y sufijo JSON
       s = s
         .replace(/^\{\s*"replyText"\s*:\s*"/i, "")
         .replace(/"\s*,\s*"requestHandoff"[\s\S]*$/i, "")
@@ -517,7 +417,6 @@ export function cleanJsonArtifacts(text: string): string {
     }
   }
 
-  // Normalizar secuencias de escape
   s = s
     .replace(/\\n/g, "\n")
     .replace(/\\"/g, '"')
@@ -528,13 +427,9 @@ export function cleanJsonArtifacts(text: string): string {
   return s;
 }
 
-/**
- * Extrae limpiamente replyText, requestHandoff y handoffReason
- * sin importar si el modelo usó JSON puro, JSON con saltos de línea crudos, o texto simple.
- */
 export function extractCleanReply(rawText: string): AIResponse {
   const fallbackText =
-    "¡Hola! Bienvenido a Deploy 🚀\n\n¿En qué te podemos colaborar hoy?\n\n📌 *Menú Principal:*\n1️⃣ Preguntas Frecuentes (FAQ)\n2️⃣ Servicios y Soluciones Web\n3️⃣ Soporte Técnico\n4️⃣ Hablar con un Asesor";
+    "¡Hola! Bienvenido a Deploy 🚀\n\n¿En qué te podemos colaborar hoy con tus proyectos tecnológicos o desarrollo de software?";
 
   if (!rawText || !rawText.trim()) {
     return { replyText: fallbackText, requestHandoff: false };
@@ -542,7 +437,6 @@ export function extractCleanReply(rawText: string): AIResponse {
 
   const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
 
-  // 1. Intento con JSON.parse estándar
   try {
     const firstBrace = cleaned.indexOf("{");
     const lastBrace = cleaned.lastIndexOf("}");
@@ -559,10 +453,9 @@ export function extractCleanReply(rawText: string): AIResponse {
       }
     }
   } catch {
-    // Si falla por caracteres de control (newlines crudos en strings), usar regex tolerante
+    // Continuar con regex
   }
 
-  // 2. Extracción mediante regex multilínea tolerante a newlines crudos
   try {
     const replyRegex = /"replyText"\s*:\s*"([\s\S]*?)"(?:\s*,\s*"requestHandoff"|\s*,\s*"handoffReason"|\s*})/i;
     const match = cleaned.match(replyRegex);
@@ -586,10 +479,9 @@ export function extractCleanReply(rawText: string): AIResponse {
       };
     }
   } catch {
-    // Continuar al paso 3
+    // Continuar al fallback
   }
 
-  // 3. Fallback: Limpieza profunda de cualquier resto de JSON
   return {
     replyText: cleanJsonArtifacts(cleaned) || fallbackText,
     requestHandoff: /"requestHandoff"\s*:\s*true/i.test(cleaned),
