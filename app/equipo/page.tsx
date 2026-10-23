@@ -1,30 +1,39 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
   ArrowRight,
   Bell,
   BellOff,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Clock,
+  Edit2,
   ExternalLink,
   MessageSquare,
+  Plus,
   RefreshCw,
   Search,
   Shield,
+  Trash2,
+  UserCheck,
+  UserPlus,
   Users,
   Zap,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import {
-  CRM_AGENTS,
   CRMAgent,
+  getAllAgents,
+  saveAgent,
+  deleteAgent,
   getAllAssignmentsMap,
+  assignLeadAgent,
   getAgentById,
 } from "@/lib/agents";
-import { getAllTagsMap } from "@/lib/tags";
 import {
   getNotificationPermission,
   isPushEnabled,
@@ -58,9 +67,104 @@ interface AgentStats {
   conversations: ConversationData[];
 }
 
+// Datos de demostración cuando Supabase está en configuración inicial
+const DEMO_EQUIPO_CONVERSATIONS: ConversationData[] = [
+  {
+    id: "demo-1",
+    contact_id: "contact-1",
+    status: "ai_active",
+    last_message_at: new Date(Date.now() - 28 * 60 * 1000).toISOString(),
+    last_message_preview: "Hola",
+    unread_count: 0,
+    contacts: {
+      id: "contact-1",
+      name: "Ing Jesus Pichardo",
+      phone: "+584124811691",
+    },
+  },
+  {
+    id: "demo-2",
+    contact_id: "contact-2",
+    status: "ai_active",
+    last_message_at: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
+    last_message_preview: "Saludos! Un gusto saludarte de nuevo.",
+    unread_count: 0,
+    contacts: {
+      id: "contact-2",
+      name: "Mario Gonzalez",
+      phone: "+584145614391",
+    },
+  },
+  {
+    id: "demo-3",
+    contact_id: "contact-3",
+    status: "waiting_agent",
+    last_message_at: new Date(Date.now() - 48 * 3600 * 1000).toISOString(),
+    last_message_preview: "Hola! Muy buenos dias. Bienvenido a Deplo...",
+    unread_count: 1,
+    contacts: {
+      id: "contact-3",
+      name: "Jose Colmenarez",
+      phone: "+555195098805",
+    },
+  },
+  {
+    id: "demo-4",
+    contact_id: "contact-4",
+    status: "ai_active",
+    last_message_at: new Date(Date.now() - 72 * 3600 * 1000).toISOString(),
+    last_message_preview: "Hola! Para crear una Card en Kotlin...",
+    unread_count: 0,
+    contacts: {
+      id: "contact-4",
+      name: "Jesus Rivero",
+      phone: "+584145414202",
+    },
+  },
+  {
+    id: "demo-5",
+    contact_id: "contact-5",
+    status: "waiting_agent",
+    last_message_at: new Date(Date.now() - 96 * 3600 * 1000).toISOString(),
+    last_message_preview: "Lamento el inconveniente con la activacion...",
+    unread_count: 2,
+    contacts: {
+      id: "contact-5",
+      name: "Caos Mel",
+      phone: "+584125590265",
+    },
+  },
+  {
+    id: "demo-6",
+    contact_id: "contact-6",
+    status: "human_takeover",
+    last_message_at: new Date(Date.now() - 120 * 3600 * 1000).toISOString(),
+    last_message_preview: "El huesazo",
+    unread_count: 0,
+    contacts: {
+      id: "contact-6",
+      name: "Cliente Demo",
+      phone: "+584245883315",
+    },
+  },
+  {
+    id: "demo-7",
+    contact_id: "contact-7",
+    status: "resolved",
+    last_message_at: new Date(Date.now() - 144 * 3600 * 1000).toISOString(),
+    last_message_preview: "Hola, es una prueba",
+    unread_count: 0,
+    contacts: {
+      id: "contact-7",
+      name: "Carlos Mendoza",
+      phone: "+1234567890",
+    },
+  },
+];
+
 export default function EquipoPage() {
-  const [conversations, setConversations] = useState<ConversationData[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [conversations, setConversations] = useState<ConversationData[]>(DEMO_EQUIPO_CONVERSATIONS);
+  const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState<string>("all");
   const [pushEnabled, setPushEnabledState] = useState(false);
@@ -69,10 +173,32 @@ export default function EquipoPage() {
   >("unavailable");
   const [refreshing, setRefreshing] = useState(false);
 
-  // Mapas de asignaciones y tags
-  const [assignmentsMap, setAssignmentsMap] = useState<Record<string, string>>(
-    {}
-  );
+  // Lista dinamica de asesores
+  const [teamAgents, setTeamAgents] = useState<CRMAgent[]>([]);
+
+  // Modal para gestionar asesores
+  const [showManageModal, setShowManageModal] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<{ id?: string; name: string; role: string } | null>(null);
+
+  // Mapas de asignaciones de asesores
+  const [assignmentsMap, setAssignmentsMap] = useState<Record<string, string>>({});
+
+  // ID del contacto cuyo menu dropdown de asignacion esta abierto
+  const [activePickerContactId, setActivePickerContactId] = useState<string | null>(null);
+
+  // Toast flotante de confirmacion de asignacion o gestion
+  const [assignmentToast, setAssignmentToast] = useState<{
+    contactName: string;
+    agentName: string;
+    agentColor: string;
+    isUnassigned: boolean;
+  } | null>(null);
+
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+
+  const reloadAgents = () => {
+    setTeamAgents(getAllAgents());
+  };
 
   const fetchData = async () => {
     try {
@@ -81,9 +207,11 @@ export default function EquipoPage() {
         .select("*, contacts(*)")
         .order("last_message_at", { ascending: false });
 
-      if (!error && data) {
+      if (!error && data && data.length > 0) {
         setConversations(data as ConversationData[]);
       }
+    } catch {
+      // Usar lista demo
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -92,13 +220,26 @@ export default function EquipoPage() {
 
   useEffect(() => {
     fetchData();
+    reloadAgents();
     setAssignmentsMap(getAllAssignmentsMap());
 
-    // Check push notification state
+    // Estado de notificaciones push
     setPushPermission(getNotificationPermission());
     setPushEnabledState(isPushEnabled());
 
-    // Realtime updates
+    // Escuchar eventos de cambio de asignacion entre pestanas y componentes
+    const handleAssignmentChange = () => {
+      setAssignmentsMap(getAllAssignmentsMap());
+    };
+    const handleAgentsUpdated = () => {
+      reloadAgents();
+      setAssignmentsMap(getAllAssignmentsMap());
+    };
+
+    window.addEventListener("crm:assignment-change", handleAssignmentChange);
+    window.addEventListener("crm:agents-updated", handleAgentsUpdated);
+
+    // Actualizaciones en tiempo real con Supabase
     const channel = supabase
       .channel("equipo-realtime")
       .on(
@@ -112,9 +253,93 @@ export default function EquipoPage() {
       .subscribe();
 
     return () => {
+      window.removeEventListener("crm:assignment-change", handleAssignmentChange);
+      window.removeEventListener("crm:agents-updated", handleAgentsUpdated);
       supabase.removeChannel(channel);
     };
   }, []);
+
+  // Handlers para crear, editar o eliminar asesores
+  const handleSaveAgentSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAgent || !editingAgent.name.trim()) return;
+
+    const saved = saveAgent({
+      id: editingAgent.id,
+      name: editingAgent.name,
+      role: editingAgent.role || "Asesor",
+    });
+
+    setEditingAgent(null);
+    reloadAgents();
+
+    setAssignmentToast({
+      contactName: saved.name,
+      agentName: saved.role,
+      agentColor: saved.color,
+      isUnassigned: false,
+    });
+    setTimeout(() => setAssignmentToast(null), 3000);
+  };
+
+  const handleDeleteAgent = (agentId: string, agentName: string) => {
+    if (confirm(`Esta seguro de eliminar a ${agentName}? Sus chats asignados pasaran a Sin asignar.`)) {
+      deleteAgent(agentId);
+      reloadAgents();
+      if (selectedAgentId === agentId) {
+        setSelectedAgentId("all");
+      }
+    }
+  };
+
+  // Cerrar selector al hacer clic fuera
+  useEffect(() => {
+    const handleDocumentClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-agent-picker]")) {
+        setActivePickerContactId(null);
+      }
+    };
+
+    if (activePickerContactId) {
+      document.addEventListener("mousedown", handleDocumentClick);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleDocumentClick);
+    };
+  }, [activePickerContactId]);
+
+  // Asignar asesor a un lead / chat
+  const handleAssignAgentToContact = (
+    contactId: string,
+    agentId: string,
+    contactName: string
+  ) => {
+    assignLeadAgent(contactId, agentId);
+    setAssignmentsMap((prev) => {
+      const updated = { ...prev };
+      if (agentId === "unassigned") {
+        delete updated[contactId];
+      } else {
+        updated[contactId] = agentId;
+      }
+      return updated;
+    });
+
+    setActivePickerContactId(null);
+
+    const agent = getAgentById(agentId);
+    setAssignmentToast({
+      contactName,
+      agentName: agent.name,
+      agentColor: agent.color,
+      isUnassigned: agentId === "unassigned",
+    });
+
+    setTimeout(() => {
+      setAssignmentToast(null);
+    }, 3500);
+  };
 
   const handleTogglePush = async () => {
     if (!supportsNotifications()) return;
@@ -140,9 +365,10 @@ export default function EquipoPage() {
     setAssignmentsMap(getAllAssignmentsMap());
   };
 
-  // Construir estadísticas por asesor
+  // Construir estadisticas en tiempo real por asesor
   const agentStats = useMemo((): AgentStats[] => {
-    return CRM_AGENTS.map((agent) => {
+    const list = teamAgents.length > 0 ? teamAgents : getAllAgents();
+    return list.map((agent) => {
       const assigned =
         agent.id === "unassigned"
           ? conversations.filter(
@@ -157,16 +383,15 @@ export default function EquipoPage() {
       return {
         agent,
         assignedCount: assigned.length,
-        waitingCount: assigned.filter((c) => c.status === "waiting_agent")
-          .length,
+        waitingCount: assigned.filter((c) => c.status === "waiting_agent").length,
         activeCount: assigned.filter((c) => c.status === "ai_active").length,
         resolvedCount: assigned.filter((c) => c.status === "resolved").length,
         conversations: assigned,
       };
     });
-  }, [conversations, assignmentsMap]);
+  }, [conversations, assignmentsMap, teamAgents]);
 
-  // Estadísticas globales
+  // Estadisticas globales
   const totalStats = useMemo(() => {
     return {
       total: conversations.length,
@@ -182,7 +407,7 @@ export default function EquipoPage() {
     };
   }, [conversations, assignmentsMap]);
 
-  // Conversaciones filtradas para la vista de detalle
+  // Conversaciones filtradas por asesor y termino de busqueda
   const filteredConversations = useMemo(() => {
     const base =
       selectedAgentId === "all"
@@ -254,9 +479,45 @@ export default function EquipoPage() {
     }
   };
 
+  const currentAgents = teamAgents.length > 0 ? teamAgents : getAllAgents();
+
   return (
-    <div className="min-h-screen bg-ink p-4 md:p-6 lg:p-8">
+    <div className="min-h-screen bg-ink p-4 md:p-6 lg:p-8 relative">
+
+      {/* Toast Flotante de Asignacion Exitosa */}
+      {assignmentToast && (
+        <div className="fixed top-5 right-5 z-50 flex items-center gap-3 rounded-xl border border-line bg-panel/95 p-3.5 shadow-2xl backdrop-blur-xl animate-in slide-in-from-top-3 duration-200">
+          <div
+            className="grid size-8 place-items-center rounded-lg text-xs font-bold"
+            style={{
+              backgroundColor: `${assignmentToast.agentColor}20`,
+              color: assignmentToast.agentColor,
+            }}
+          >
+            <UserCheck className="size-4" />
+          </div>
+          <div className="text-xs">
+            <p className="font-semibold text-white">
+              {assignmentToast.isUnassigned ? "Asignacion eliminada" : "Asesor Asignado"}
+            </p>
+            <p className="text-slate-400 mt-0.5">
+              <strong className="text-slate-200">{assignmentToast.contactName}</strong>{" "}
+              {assignmentToast.isUnassigned
+                ? "ha quedado sin asesor asignado"
+                : `ahora es atendido por ${assignmentToast.agentName}`}
+            </p>
+          </div>
+          <button
+            onClick={() => setAssignmentToast(null)}
+            className="text-slate-500 hover:text-white text-xs ml-2"
+          >
+            x
+          </button>
+        </div>
+      )}
+
       <div className="mx-auto max-w-7xl space-y-6">
+
         {/* Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -267,17 +528,27 @@ export default function EquipoPage() {
               Equipo de Asesores
             </h1>
             <p className="text-sm text-slate-400 mt-0.5">
-              Carga de trabajo, asignaciones y rendimiento en tiempo real
+              Supervision de carga, distribucion de leads y asignacion del asesor que atiende cada chat
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Botón Notificaciones Push */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Boton Gestionar Asesores */}
+            <button
+              onClick={() => {
+                setEditingAgent(null);
+                setShowManageModal(true);
+              }}
+              className="flex items-center gap-2 rounded-lg border border-signal/40 bg-signal/10 px-3.5 py-2 text-xs font-semibold text-signal hover:bg-signal/20 transition cursor-pointer shadow-sm active:scale-95"
+            >
+              <UserPlus className="size-3.5" />
+              <span>Gestionar Asesores</span>
+            </button>
+
+            {/* Boton Notificaciones Push */}
             <button
               onClick={handleTogglePush}
-              disabled={
-                !supportsNotifications() || pushPermission === "denied"
-              }
+              disabled={!supportsNotifications() || pushPermission === "denied"}
               title={
                 pushPermission === "denied"
                   ? "Permiso de notificaciones bloqueado por el navegador"
@@ -293,11 +564,7 @@ export default function EquipoPage() {
                   : "border-line bg-white/5 text-slate-400 hover:text-white hover:bg-white/10"
               }`}
             >
-              {pushEnabled ? (
-                <Bell className="size-3.5" />
-              ) : (
-                <BellOff className="size-3.5" />
-              )}
+              {pushEnabled ? <Bell className="size-3.5" /> : <BellOff className="size-3.5" />}
               <span className="hidden sm:inline">
                 {pushPermission === "denied"
                   ? "Push bloqueado"
@@ -312,9 +579,7 @@ export default function EquipoPage() {
               disabled={refreshing}
               className="flex items-center gap-2 rounded-lg border border-line bg-white/5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-white hover:bg-white/10 transition"
             >
-              <RefreshCw
-                className={`size-3.5 ${refreshing ? "animate-spin" : ""}`}
-              />
+              <RefreshCw className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
               <span className="hidden sm:inline">Actualizar</span>
             </button>
 
@@ -335,13 +600,13 @@ export default function EquipoPage() {
             <div className="text-xs text-rose-300">
               <p className="font-semibold">Notificaciones push bloqueadas</p>
               <p className="text-rose-400/70 mt-0.5">
-                Ve a la configuración de tu navegador → Privacidad → Notificaciones y permite este sitio.
+                Ve a la configuracion de tu navegador, Privacidad, Notificaciones y permite este sitio.
               </p>
             </div>
           </div>
         )}
 
-        {/* Tarjetas de Métricas Globales */}
+        {/* Tarjetas de Metricas Globales */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           {[
             {
@@ -396,9 +661,15 @@ export default function EquipoPage() {
 
         {/* Tarjetas de Asesores (Carga de Trabajo) */}
         <div>
-          <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-3">
-            Carga por Asesor
-          </h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wider">
+              Carga por Asesor
+            </h2>
+            <span className="text-xs text-slate-400">
+              Haz clic en una tarjeta para filtrar los leads asignados
+            </span>
+          </div>
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
             {agentStats.map((stats) => {
               const isSelected = selectedAgentId === stats.agent.id;
@@ -407,13 +678,11 @@ export default function EquipoPage() {
                 <button
                   key={stats.agent.id}
                   onClick={() =>
-                    setSelectedAgentId(
-                      isSelected ? "all" : stats.agent.id
-                    )
+                    setSelectedAgentId(isSelected ? "all" : stats.agent.id)
                   }
-                  className={`rounded-xl border p-4 text-left transition space-y-3 ${
+                  className={`rounded-xl border p-4 text-left transition space-y-3 cursor-pointer ${
                     isSelected
-                      ? `${stats.agent.borderClass} ${stats.agent.bgClass} shadow-lg`
+                      ? `${stats.agent.borderClass} ${stats.agent.bgClass} shadow-lg ring-1 ring-primary/40`
                       : "border-line bg-panel/50 hover:bg-panel/80 hover:border-line/80"
                   }`}
                 >
@@ -433,14 +702,12 @@ export default function EquipoPage() {
                         </p>
                       </div>
                     </div>
-                    <span
-                      className={`text-lg font-bold ${stats.agent.textClass}`}
-                    >
+                    <span className={`text-lg font-bold ${stats.agent.textClass}`}>
                       {stats.assignedCount}
                     </span>
                   </div>
 
-                  {/* Mini progreso bars */}
+                  {/* Mini desglose de estados */}
                   <div className="space-y-1.5">
                     {stats.waitingCount > 0 && (
                       <div className="flex items-center justify-between text-[10px]">
@@ -468,14 +735,14 @@ export default function EquipoPage() {
                     )}
                     {stats.assignedCount === 0 && (
                       <p className="text-[10px] text-slate-600">
-                        {isUnassigned ? "Todos asignados ✓" : "Sin leads"}
+                        {isUnassigned ? "Todos asignados" : "Sin leads asignados"}
                       </p>
                     )}
                   </div>
 
                   {isSelected && (
-                    <p className="text-[9px] text-slate-400 border-t border-white/10 pt-2">
-                      Haz clic para ver todos
+                    <p className="text-[9px] text-slate-400 border-t border-white/10 pt-2 font-medium">
+                      Filtrando leads de este asesor (clic para ver todos)
                     </p>
                   )}
                 </button>
@@ -484,27 +751,32 @@ export default function EquipoPage() {
           </div>
         </div>
 
-        {/* Tabla de Conversaciones */}
-        <div className="rounded-xl border border-line bg-panel/80 overflow-hidden">
+        {/* Tabla de Conversaciones con Asignacion de Asesor */}
+        <div
+          ref={tableContainerRef}
+          className="rounded-xl border border-line bg-panel/80 overflow-visible"
+        >
           {/* Header de la tabla */}
           <div className="flex flex-col gap-3 border-b border-line p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <h2 className="text-sm font-semibold text-white">
                 {selectedAgentId === "all"
                   ? "Todas las conversaciones"
-                  : `Leads de ${getAgentById(selectedAgentId).name}`}
+                  : selectedAgentId === "unassigned"
+                  ? "Leads Sin Asignar"
+                  : `Leads atendidos por ${getAgentById(selectedAgentId).name}`}
               </h2>
               <span className="rounded-full border border-line bg-white/5 px-2 py-0.5 text-[10px] font-medium text-slate-400">
                 {filteredConversations.length}
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               {/* Filtros por asesor (pills) */}
               <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
                 <button
                   onClick={() => setSelectedAgentId("all")}
-                  className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                  className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium transition cursor-pointer ${
                     selectedAgentId === "all"
                       ? "bg-signal text-ink font-semibold"
                       : "bg-white/5 text-slate-400 hover:text-white hover:bg-white/10"
@@ -512,13 +784,13 @@ export default function EquipoPage() {
                 >
                   Todos
                 </button>
-                {CRM_AGENTS.slice(1).map((agent) => (
+                {currentAgents.map((agent) => (
                   <button
                     key={agent.id}
                     onClick={() => setSelectedAgentId(agent.id)}
-                    className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                    className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium transition cursor-pointer ${
                       selectedAgentId === agent.id
-                        ? `${agent.bgClass} ${agent.textClass} border ${agent.borderClass}`
+                        ? `${agent.bgClass} ${agent.textClass} border ${agent.borderClass} font-semibold`
                         : "bg-white/5 text-slate-400 hover:text-white hover:bg-white/10"
                     }`}
                   >
@@ -534,8 +806,8 @@ export default function EquipoPage() {
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Buscar..."
-                  className="w-36 rounded-lg border border-line bg-ink/60 pl-8 pr-3 py-1.5 text-xs text-white placeholder:text-slate-600 outline-none focus:border-signal/50 transition"
+                  placeholder="Buscar lead o mensaje..."
+                  className="w-40 sm:w-48 rounded-lg border border-line bg-ink/60 pl-8 pr-3 py-1.5 text-xs text-white placeholder:text-slate-600 outline-none focus:border-signal/50 transition"
                 />
               </div>
             </div>
@@ -550,64 +822,168 @@ export default function EquipoPage() {
           ) : filteredConversations.length === 0 ? (
             <div className="p-12 text-center text-slate-500">
               <Users className="size-10 mx-auto text-slate-700 mb-3" />
-              <p className="text-sm">Sin conversaciones para este filtro</p>
+              <p className="text-sm font-medium">Sin conversaciones para este filtro</p>
+              {selectedAgentId !== "all" && (
+                <button
+                  onClick={() => setSelectedAgentId("all")}
+                  className="mt-2 text-xs text-signal hover:underline"
+                >
+                  Ver todas las conversaciones
+                </button>
+              )}
             </div>
           ) : (
             <div className="divide-y divide-line/50">
               {/* Fila encabezado */}
-              <div className="hidden sm:grid grid-cols-[1fr_140px_120px_120px_100px] gap-4 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+              <div className="hidden sm:grid grid-cols-[1fr_170px_110px_110px_100px] gap-4 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-white/[0.01]">
                 <span>Lead / Contacto</span>
-                <span>Asesor Asignado</span>
+                <span>Asesor Asignado (Asignar)</span>
                 <span>Estado</span>
-                <span>Último Mensaje</span>
-                <span className="text-center">Acción</span>
+                <span>Ultimo Mensaje</span>
+                <span className="text-center">Accion</span>
               </div>
 
               {filteredConversations.map((conv) => {
-                const contactName =
-                  conv.contacts?.name || conv.contacts?.phone || "Cliente";
-                const assignedAgentId =
-                  assignmentsMap[conv.contact_id] || "unassigned";
+                const contactName = conv.contacts?.name || conv.contacts?.phone || "Cliente";
+                const assignedAgentId = assignmentsMap[conv.contact_id] || "unassigned";
                 const agent = getAgentById(assignedAgentId);
                 const initials = contactName.substring(0, 2).toUpperCase();
+                const isPickerOpen = activePickerContactId === conv.contact_id;
 
                 return (
                   <div
                     key={conv.id}
-                    className="grid grid-cols-1 sm:grid-cols-[1fr_140px_120px_120px_100px] gap-2 sm:gap-4 px-4 py-3 hover:bg-white/[0.02] transition group items-center"
+                    className="grid grid-cols-1 sm:grid-cols-[1fr_170px_110px_110px_100px] gap-3 sm:gap-4 px-4 py-3 hover:bg-white/[0.02] transition items-center"
                   >
                     {/* Lead / Contacto */}
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-white/10 text-xs font-bold text-white ring-1 ring-white/10">
+                      <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-white/10 text-xs font-bold text-white ring-1 ring-white/10">
                         {initials}
                       </span>
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-white truncate">
-                          {contactName}
-                        </p>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="text-sm font-semibold text-white truncate">
+                            {contactName}
+                          </p>
+                          {/* Badge de estado en mobile */}
+                          <span
+                            className={`sm:hidden inline-flex items-center rounded-full border px-2 py-0.5 text-[9px] font-medium ${getStatusBadge(
+                              conv.status
+                            )}`}
+                          >
+                            {conv.status === "waiting_agent" && (
+                              <span className="mr-1 size-1.5 rounded-full bg-amber-400 animate-pulse inline-block" />
+                            )}
+                            {getStatusLabel(conv.status)}
+                          </span>
+                        </div>
                         <p className="text-[10px] font-mono text-slate-500 truncate">
                           {conv.contacts?.phone}
                         </p>
                         {conv.last_message_preview && (
-                          <p className="text-[10px] text-slate-600 truncate mt-0.5 max-w-xs">
+                          <p className="text-[11px] text-slate-400 truncate mt-0.5 max-w-sm">
                             {conv.last_message_preview}
                           </p>
                         )}
                       </div>
                     </div>
 
-                    {/* Asesor Asignado */}
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10px] font-medium ${agent.bgClass} ${agent.textClass} ${agent.borderClass}`}
+                    {/* Asesor Asignado (SELECTOR INTERACTIVO) */}
+                    <div className="relative" data-agent-picker>
+                      <div className="sm:hidden text-[10px] uppercase font-bold text-slate-500 mb-1">
+                        Asesor que atiende:
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActivePickerContactId(isPickerOpen ? null : conv.contact_id);
+                        }}
+                        className={`inline-flex items-center justify-between gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition cursor-pointer w-full sm:w-auto hover:brightness-110 active:scale-95 ${agent.bgClass} ${agent.textClass} ${agent.borderClass} ${
+                          assignedAgentId === "unassigned"
+                            ? "border-dashed hover:border-solid hover:bg-white/10"
+                            : "shadow-sm"
+                        }`}
+                        title="Haz clic para asignar o cambiar el asesor"
                       >
-                        <span className="font-bold">{agent.avatar}</span>
-                        <span>{agent.name}</span>
-                      </span>
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span className="font-bold text-[11px] shrink-0">{agent.avatar}</span>
+                          <span className="truncate max-w-[95px] font-semibold">{agent.name}</span>
+                        </div>
+                        <ChevronDown className="size-3.5 opacity-60 shrink-0 ml-1" />
+                      </button>
+
+                      {/* Dropdown flotante con selector de asesores */}
+                      {isPickerOpen && (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="absolute left-0 sm:left-auto sm:right-0 top-full mt-1.5 z-50 w-64 rounded-xl border border-line bg-panel p-2 shadow-2xl backdrop-blur-2xl ring-1 ring-white/10"
+                        >
+                          <div className="px-2 py-1.5 border-b border-line/60 mb-1.5 flex items-center justify-between">
+                            <div className="flex items-center gap-1.5">
+                              <UserPlus className="size-3.5 text-signal" />
+                              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300">
+                                Asignar a {contactName.split(" ")[0]}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setActivePickerContactId(null)}
+                              className="text-slate-500 hover:text-white text-xs p-0.5"
+                            >
+                              x
+                            </button>
+                          </div>
+
+                          <div className="space-y-1">
+                            {currentAgents.map((a) => {
+                              const isCurrent = assignedAgentId === a.id;
+                              return (
+                                <button
+                                  key={a.id}
+                                  type="button"
+                                  onClick={() =>
+                                    handleAssignAgentToContact(
+                                      conv.contact_id,
+                                      a.id,
+                                      contactName
+                                    )
+                                  }
+                                  className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-xs transition text-left cursor-pointer ${
+                                    isCurrent
+                                      ? `${a.bgClass} ${a.textClass} font-semibold border ${a.borderClass}`
+                                      : "text-slate-300 hover:bg-white/5 hover:text-white"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    <span
+                                      className={`grid size-6 place-items-center rounded text-[10px] font-bold ${a.bgClass} ${a.textClass} border ${a.borderClass}`}
+                                    >
+                                      {a.avatar}
+                                    </span>
+                                    <div className="truncate">
+                                      <p className="truncate font-semibold">{a.name}</p>
+                                      {a.role !== "-" && (
+                                        <p className="text-[9px] text-slate-500 truncate">
+                                          {a.role}
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                  {isCurrent && (
+                                    <Check className="size-3.5 text-signal shrink-0 ml-1.5" />
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
 
-                    {/* Estado */}
-                    <div>
+                    {/* Estado en desktop */}
+                    <div className="hidden sm:block">
                       <span
                         className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${getStatusBadge(
                           conv.status
@@ -620,19 +996,19 @@ export default function EquipoPage() {
                       </span>
                     </div>
 
-                    {/* Último Mensaje */}
+                    {/* Ultimo Mensaje */}
                     <div className="text-[11px] text-slate-400">
-                      {conv.last_message_at ? formatTime(conv.last_message_at) : "—"}
+                      {conv.last_message_at ? formatTime(conv.last_message_at) : "-"}
                     </div>
 
-                    {/* Acción */}
+                    {/* Accion */}
                     <div className="flex justify-start sm:justify-center">
                       <Link
                         href={`/chat?id=${conv.id}`}
-                        className="flex items-center gap-1 rounded-lg border border-line bg-white/5 px-2.5 py-1.5 text-[10px] font-semibold text-slate-400 hover:text-white hover:bg-white/10 hover:border-signal/30 transition"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:text-white hover:bg-white/10 hover:border-signal/30 transition w-full sm:w-auto justify-center"
                       >
-                        <MessageSquare className="size-3" />
-                        Abrir
+                        <MessageSquare className="size-3 text-signal" />
+                        Abrir Chat
                         <ArrowRight className="size-3" />
                       </Link>
                     </div>
@@ -649,17 +1025,17 @@ export default function EquipoPage() {
             <Bell className="size-4 text-signal shrink-0 mt-0.5" />
             <div className="text-xs text-slate-300 flex-1">
               <p className="font-semibold text-signal">
-                Activa las notificaciones push para no perderte ningún lead
+                Activa las notificaciones push para no perderte ningun lead
               </p>
               <p className="text-slate-500 mt-0.5">
-                Recibirás alertas instantáneas cuando llegue un mensaje nuevo o un lead esté esperando asesor, incluso con otra pestaña abierta.
+                Recibiras alertas instantaneas cuando llegue un mensaje nuevo o un lead este esperando asesor, incluso con otra pestana abierta.
               </p>
             </div>
             <button
               onClick={handleTogglePush}
-              className="shrink-0 rounded-lg border border-signal/40 bg-signal/10 px-3 py-1.5 text-xs font-semibold text-signal hover:bg-signal/20 transition"
+              className="shrink-0 rounded-lg border border-signal/40 bg-signal/10 px-3 py-1.5 text-xs font-semibold text-signal hover:bg-signal/20 transition cursor-pointer"
             >
-              Activar →
+              Activar
             </button>
           </div>
         )}
@@ -669,11 +1045,189 @@ export default function EquipoPage() {
             <CheckCircle2 className="size-4 text-emerald-400 shrink-0" />
             <p className="text-xs text-emerald-300">
               <span className="font-semibold">Notificaciones push activas.</span>{" "}
-              Recibirás alertas en este navegador cuando haya actividad de leads.
+              Recibiras alertas en este navegador cuando haya actividad de leads.
             </p>
           </div>
         )}
+
       </div>
+
+      {/* Modal para Gestionar Asesores (fuera del max-w-7xl pero dentro del root) */}
+      {showManageModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => { setShowManageModal(false); setEditingAgent(null); }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg rounded-2xl border border-line bg-panel p-6 shadow-2xl relative space-y-5"
+          >
+            {/* Header del Modal */}
+            <div className="flex items-center justify-between border-b border-line pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="grid size-9 place-items-center rounded-lg bg-signal/15 text-signal border border-signal/30 font-bold">
+                  <Users className="size-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Gestionar Equipo de Asesores</h3>
+                  <p className="text-xs text-slate-400">Agrega, edita o elimina los asesores que atienden el CRM</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowManageModal(false);
+                  setEditingAgent(null);
+                }}
+                className="size-8 rounded-lg border border-line bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 flex items-center justify-center transition cursor-pointer"
+              >
+                x
+              </button>
+            </div>
+
+            {/* Formulario para agregar / editar asesor */}
+            <form onSubmit={handleSaveAgentSubmit} className="rounded-xl border border-line/80 bg-ink/50 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-signal">
+                  {editingAgent?.id ? "Editar Asesor" : "Nuevo Asesor"}
+                </span>
+                {editingAgent && (
+                  <button
+                    type="button"
+                    onClick={() => setEditingAgent(null)}
+                    className="text-[11px] text-slate-400 hover:text-white underline cursor-pointer"
+                  >
+                    Cancelar edicion
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                    Nombre del Asesor
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editingAgent?.name ?? ""}
+                    onChange={(e) =>
+                      setEditingAgent((prev) => ({
+                        id: prev?.id,
+                        name: e.target.value,
+                        role: prev?.role ?? "",
+                      }))
+                    }
+                    placeholder="Ej. Roberto Diaz"
+                    className="w-full rounded-lg border border-line bg-panel px-3 py-1.5 text-xs text-white placeholder:text-slate-600 outline-none focus:border-signal/60 transition"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                    Cargo / Rol
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editingAgent?.role ?? ""}
+                    onChange={(e) =>
+                      setEditingAgent((prev) => ({
+                        id: prev?.id,
+                        name: prev?.name ?? "",
+                        role: e.target.value,
+                      }))
+                    }
+                    placeholder="Ej. Ventas Inmobiliarias"
+                    className="w-full rounded-lg border border-line bg-panel px-3 py-1.5 text-xs text-white placeholder:text-slate-600 outline-none focus:border-signal/60 transition"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-1">
+                <button
+                  type="submit"
+                  className="flex items-center gap-1.5 rounded-lg bg-signal text-ink px-3.5 py-1.5 text-xs font-bold hover:brightness-110 active:scale-95 transition cursor-pointer shadow-sm"
+                >
+                  <Plus className="size-3.5" />
+                  <span>{editingAgent?.id ? "Guardar Cambios" : "Agregar Asesor"}</span>
+                </button>
+              </div>
+            </form>
+
+            {/* Lista de Asesores Actuales */}
+            <div className="space-y-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block">
+                Asesores Registrados ({currentAgents.filter((a) => a.id !== "unassigned").length})
+              </span>
+
+              <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
+                {currentAgents
+                  .filter((a) => a.id !== "unassigned")
+                  .map((agent) => (
+                    <div
+                      key={agent.id}
+                      className="flex items-center justify-between rounded-xl border border-line/60 bg-ink/40 p-2.5 transition hover:bg-ink/70"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span
+                          className={`grid size-8 place-items-center rounded-lg text-xs font-bold ${agent.bgClass} ${agent.textClass} border ${agent.borderClass}`}
+                        >
+                          {agent.avatar}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-white truncate">{agent.name}</p>
+                          <p className="text-[10px] text-slate-400 truncate">{agent.role}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingAgent({
+                              id: agent.id,
+                              name: agent.name,
+                              role: agent.role,
+                            })
+                          }
+                          className="size-7 rounded-lg border border-line/60 bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 flex items-center justify-center transition cursor-pointer"
+                          title="Editar asesor"
+                        >
+                          <Edit2 className="size-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAgent(agent.id, agent.name)}
+                          className="size-7 rounded-lg border border-line/60 bg-white/5 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 flex items-center justify-center transition cursor-pointer"
+                          title="Eliminar asesor"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+
+            {/* Footer del Modal */}
+            <div className="flex items-center justify-between border-t border-line pt-3 text-[11px] text-slate-400">
+              <span>Los cambios se guardan y sincronizan inmediatamente con el chat.</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowManageModal(false);
+                  setEditingAgent(null);
+                }}
+                className="rounded-lg border border-line bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

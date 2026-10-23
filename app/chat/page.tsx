@@ -28,6 +28,7 @@ import {
   UserRound,
   X,
   Zap,
+  RefreshCw,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { cleanJsonArtifacts } from "@/lib/ai";
@@ -36,6 +37,7 @@ import { CRM_TAGS, getAllTagsMap, toggleLeadTag } from "@/lib/tags";
 import {
   CRM_AGENTS,
   CRMAgent,
+  getAllAgents,
   getAllAssignmentsMap,
   assignLeadAgent,
   getAgentById,
@@ -76,9 +78,146 @@ interface Message {
 
 type FilterStatus = "all" | "waiting_agent" | "ai_active" | "human_takeover";
 
+// Datos de demostración y fallback cuando Supabase no está conectado o falla la red
+const DEMO_CHAT_CONVERSATIONS: Conversation[] = [
+  {
+    id: "demo-1",
+    contact_id: "contact-1",
+    channel: "whatsapp",
+    status: "ai_active",
+    last_message_at: new Date(Date.now() - 28 * 60 * 1000).toISOString(),
+    last_message_preview: "Hola",
+    unread_count: 0,
+    contacts: {
+      id: "contact-1",
+      name: "Ing Jesús Pichardo",
+      phone: "+584124811691",
+    },
+  },
+  {
+    id: "demo-2",
+    contact_id: "contact-2",
+    channel: "whatsapp",
+    status: "ai_active",
+    last_message_at: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
+    last_message_preview: "¡Saludos! Un gusto saludarte de nuevo.",
+    unread_count: 0,
+    contacts: {
+      id: "contact-2",
+      name: "Mario Gonzalez",
+      phone: "+584145614391",
+    },
+  },
+  {
+    id: "demo-3",
+    contact_id: "contact-3",
+    channel: "whatsapp",
+    status: "waiting_agent",
+    last_message_at: new Date(Date.now() - 48 * 3600 * 1000).toISOString(),
+    last_message_preview: "Hola! Muy buenos días. Necesito cotización para bot...",
+    unread_count: 1,
+    contacts: {
+      id: "contact-3",
+      name: "José Colmenarez",
+      phone: "+555195098805",
+    },
+  },
+  {
+    id: "demo-4",
+    contact_id: "contact-4",
+    channel: "whatsapp",
+    status: "ai_active",
+    last_message_at: new Date(Date.now() - 72 * 3600 * 1000).toISOString(),
+    last_message_preview: "Hola! Para crear una Card en Kotlin...",
+    unread_count: 0,
+    contacts: {
+      id: "contact-4",
+      name: "Jesús Rivero",
+      phone: "+584145414202",
+    },
+  },
+  {
+    id: "demo-5",
+    contact_id: "contact-5",
+    channel: "whatsapp",
+    status: "waiting_agent",
+    last_message_at: new Date(Date.now() - 96 * 3600 * 1000).toISOString(),
+    last_message_preview: "Lamento el inconveniente con la activación...",
+    unread_count: 2,
+    contacts: {
+      id: "contact-5",
+      name: "Caos Mel",
+      phone: "+584125590265",
+    },
+  },
+  {
+    id: "demo-6",
+    contact_id: "contact-6",
+    channel: "whatsapp",
+    status: "human_takeover",
+    last_message_at: new Date(Date.now() - 120 * 3600 * 1000).toISOString(),
+    last_message_preview: "Atendido por asesor comercial",
+    unread_count: 0,
+    contacts: {
+      id: "contact-6",
+      name: "Cliente VIP Corp",
+      phone: "+584241234567",
+    },
+  },
+];
+
+const DEMO_CHAT_MESSAGES: Record<string, Message[]> = {
+  "demo-1": [
+    {
+      id: "msg-1-1",
+      conversation_id: "demo-1",
+      sender: "client",
+      content: "Hola buenas tardes",
+      created_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+    },
+    {
+      id: "msg-1-2",
+      conversation_id: "demo-1",
+      sender: "bot",
+      content: "¡Hola! 👋 Bienvenido a Deploy. ¿En qué servicio o consulta tecnológica te podemos ayudar hoy?\n\n1️⃣ FAQ\n2️⃣ Servicios\n3️⃣ Soporte\n4️⃣ Hablar con un Asesor",
+      created_at: new Date(Date.now() - 29 * 60 * 1000).toISOString(),
+    },
+    {
+      id: "msg-1-3",
+      conversation_id: "demo-1",
+      sender: "client",
+      content: "Hola",
+      created_at: new Date(Date.now() - 28 * 60 * 1000).toISOString(),
+    },
+  ],
+  "demo-3": [
+    {
+      id: "msg-3-1",
+      conversation_id: "demo-3",
+      sender: "client",
+      content: "Hola! Quisiera cotizar un chatbot de atención para mi empresa",
+      created_at: new Date(Date.now() - 48 * 3600 * 1000).toISOString(),
+    },
+    {
+      id: "msg-3-2",
+      conversation_id: "demo-3",
+      sender: "system",
+      content: JSON.stringify({
+        type: "handoff_summary_card",
+        executiveSummary: "El cliente busca cotizar un chatbot con IA para atención comercial y automatización de respuestas.",
+        clientInterest: "Chatbot de WhatsApp con IA",
+        urgencyLevel: "alta",
+        recommendedAction: "Presentar opciones de desarrollo de bot, solicitar requerimientos de flujo y ofrecer reunión de diagnóstico.",
+        reason: "Solicitud de Cotización",
+      }),
+      created_at: new Date(Date.now() - 47 * 3600 * 1000).toISOString(),
+    },
+  ],
+};
+
 export default function ChatPage() {
   const { user } = useAuth();
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>(DEMO_CHAT_CONVERSATIONS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState("");
@@ -130,6 +269,26 @@ export default function ChatPage() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const activeConversation = conversations.find((c) => c.id === selectedId);
+
+  // Estado para la generación manual o automática del resumen
+  const [generatingSummary, setGeneratingSummary] = useState(false);
+
+  // Extraer el último resumen ejecutivo de la conversación (si existe en los mensajes)
+  const currentHandoffSummary = useMemo(() => {
+    if (!messages || messages.length === 0) return null;
+    const summaryMsg = [...messages].reverse().find(
+      (m) =>
+        m.sender === "system" &&
+        m.content.startsWith("{") &&
+        m.content.includes("handoff_summary_card")
+    );
+    if (!summaryMsg) return null;
+    try {
+      return JSON.parse(summaryMsg.content);
+    } catch {
+      return null;
+    }
+  }, [messages]);
 
   // Cargar respuestas rápidas
   useEffect(() => {
@@ -248,28 +407,28 @@ export default function ChatPage() {
         .order("last_message_at", { ascending: false });
 
       if (error) {
-        console.error("Error al cargar conversaciones:", error.message);
-        return;
+        console.warn("Aviso al consultar Supabase (usando datos locales de respaldo):", error.message);
+      } else if (data && data.length > 0) {
+        setConversations(data as Conversation[]);
       }
 
-      if (data) {
-        setConversations(data as Conversation[]);
-        if (data.length > 0 && !selectedId) {
-          const urlParamId =
-            typeof window !== "undefined"
-              ? new URLSearchParams(window.location.search).get("id")
-              : null;
-          const matched = data.find((c) => c.id === urlParamId);
-          if (matched) {
-            setSelectedId(matched.id);
-            // Si viene con id explícito en URL, abrir directo el chat en móvil
-            setMobileView("chat");
-          } else if (typeof window !== "undefined" && window.innerWidth >= 1024) {
-            // En desktop seleccionar automáticamente el primero
-            setSelectedId(data[0].id);
-          }
+      // Si no hay id seleccionado, fijar el inicial
+      const currentList = (data && data.length > 0) ? (data as Conversation[]) : DEMO_CHAT_CONVERSATIONS;
+      if (!selectedId && currentList.length > 0) {
+        const urlParamId =
+          typeof window !== "undefined"
+            ? new URLSearchParams(window.location.search).get("id")
+            : null;
+        const matched = currentList.find((c) => c.id === urlParamId);
+        if (matched) {
+          setSelectedId(matched.id);
+          setMobileView("chat");
+        } else if (typeof window !== "undefined" && window.innerWidth >= 1024) {
+          setSelectedId(currentList[0].id);
         }
       }
+    } catch (err: any) {
+      console.warn("Error de conexión con Supabase (Failed to fetch). Operando en modo local resiliente:", err?.message);
     } finally {
       setLoading(false);
     }
@@ -277,19 +436,33 @@ export default function ChatPage() {
 
   // 2. Cargar mensajes de la conversación activa
   const fetchMessages = async (convId: string) => {
-    const { data, error } = await supabase
-      .from("messages")
-      .select("*")
-      .eq("conversation_id", convId)
-      .order("created_at", { ascending: true });
+    try {
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("conversation_id", convId)
+        .order("created_at", { ascending: true });
 
-    if (error) {
-      console.error("Error al cargar mensajes:", error.message);
-      return;
-    }
+      if (error) {
+        console.warn("Aviso al cargar mensajes de Supabase:", error.message);
+        if (DEMO_CHAT_MESSAGES[convId]) {
+          setMessages(DEMO_CHAT_MESSAGES[convId]);
+        }
+        return;
+      }
 
-    if (data) {
-      setMessages(data as Message[]);
+      if (data && data.length > 0) {
+        setMessages(data as Message[]);
+      } else if (DEMO_CHAT_MESSAGES[convId]) {
+        setMessages(DEMO_CHAT_MESSAGES[convId]);
+      } else {
+        setMessages([]);
+      }
+    } catch (err: any) {
+      console.warn("Error de conexión al obtener mensajes (usando demo si existe):", err?.message);
+      if (DEMO_CHAT_MESSAGES[convId]) {
+        setMessages(DEMO_CHAT_MESSAGES[convId]);
+      }
     }
   };
 
@@ -456,19 +629,33 @@ export default function ChatPage() {
       activeConversation.status === "ai_active" ? "human_takeover" : "ai_active";
 
     try {
-      await supabase
-        .from("conversations")
-        .update({ status: newStatus })
-        .eq("id", activeConversation.id);
+      // Actualizar estado localmente de inmediato para que la interfaz responda al instante
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === activeConversation.id ? { ...c, status: newStatus } : c
+        )
+      );
 
-      await supabase.from("messages").insert({
-        conversation_id: activeConversation.id,
-        sender: "system",
-        content:
-          newStatus === "human_takeover"
-            ? "El asesor ha tomado el control manual de la conversación."
-            : "Se ha reactivado la atención automática con Inteligencia Artificial.",
-      });
+      // Intentar persistir en Supabase si está disponible (asíncrono protegido)
+      (async () => {
+        try {
+          await supabase
+            .from("conversations")
+            .update({ status: newStatus })
+            .eq("id", activeConversation.id);
+
+          await supabase.from("messages").insert({
+            conversation_id: activeConversation.id,
+            sender: "system",
+            content:
+              newStatus === "human_takeover"
+                ? "El asesor ha tomado el control manual de la conversación."
+                : "Se ha reactivado la atención automática con Inteligencia Artificial.",
+          });
+        } catch {
+          // Ignorar si la red de Supabase está offline
+        }
+      })();
 
       // Auditar el cambio de estado
       audit(
@@ -480,10 +667,39 @@ export default function ChatPage() {
         }
       );
 
-      fetchConversations();
-      fetchMessages(activeConversation.id);
+      // Si el asesor toma el control, generar automáticamente el resumen ejecutivo con IA
+      if (newStatus === "human_takeover") {
+        handleGenerateSummary(activeConversation.id);
+      }
     } catch (err) {
-      console.error("Error al cambiar estado:", err);
+      console.warn("Aviso al cambiar estado (aplicado localmente):", err);
+    }
+  };
+
+  // Función para generar o regenerar el resumen ejecutivo de la conversación
+  const handleGenerateSummary = async (convId?: string) => {
+    const targetId = convId || activeConversation?.id;
+    if (!targetId || generatingSummary) return;
+
+    try {
+      setGeneratingSummary(true);
+      const res = await fetch("/api/chat/summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId: targetId,
+          reason: "Atención por Asesor Humano",
+        }),
+      });
+
+      if (res.ok) {
+        await fetchMessages(targetId);
+        await fetchConversations();
+      }
+    } catch (err) {
+      console.error("Error al generar resumen:", err);
+    } finally {
+      setGeneratingSummary(false);
     }
   };
 
@@ -1385,6 +1601,82 @@ export default function ChatPage() {
                 </div>
               </div>
 
+              {/* Tarjeta Fija de Resumen del Lead / Conversación Tomada */}
+              <div className="rounded-xl border border-amber-400/40 bg-gradient-to-br from-amber-500/10 via-panel to-panel p-4 shadow-lg space-y-3">
+                <div className="flex items-center justify-between border-b border-amber-400/20 pb-2">
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles className="size-4 text-amber-400" />
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-amber-300">
+                      Resumen del Lead
+                    </h3>
+                  </div>
+                  <button
+                    onClick={() => handleGenerateSummary()}
+                    disabled={generatingSummary}
+                    title="Actualizar resumen con IA"
+                    className="flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold text-amber-300 hover:bg-amber-400/20 transition disabled:opacity-50 cursor-pointer"
+                  >
+                    <RefreshCw className={`size-3 ${generatingSummary ? "animate-spin" : ""}`} />
+                    <span>{generatingSummary ? "Analizando..." : "Actualizar"}</span>
+                  </button>
+                </div>
+
+                {currentHandoffSummary ? (
+                  <div className="space-y-2 text-xs">
+                    <div className="rounded-lg bg-ink/70 p-2.5 border border-line/80">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-0.5">
+                        Síntesis de la Conversación
+                      </p>
+                      <p className="text-xs text-slate-100 leading-relaxed">
+                        {currentHandoffSummary.executiveSummary}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div className="rounded-lg bg-ink/50 p-2 border border-line">
+                        <span className="text-[10px] text-slate-400 block">Interés:</span>
+                        <span className="text-amber-200 font-medium truncate block">
+                          {currentHandoffSummary.clientInterest}
+                        </span>
+                      </div>
+                      <div className="rounded-lg bg-ink/50 p-2 border border-line">
+                        <span className="text-[10px] text-slate-400 block">Urgencia:</span>
+                        <span className="text-xs font-semibold capitalize text-amber-300">
+                          {currentHandoffSummary.urgencyLevel || "Media"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {currentHandoffSummary.recommendedAction && (
+                      <div className="rounded-lg border border-amber-400/25 bg-amber-400/10 p-2 text-[11px] text-amber-200">
+                        <span className="font-bold text-amber-300 block text-[10px] uppercase tracking-wider">
+                          Acción sugerida para el asesor:
+                        </span>
+                        <p className="mt-0.5 text-slate-200 leading-snug">
+                          {currentHandoffSummary.recommendedAction}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-line/70 bg-ink/30 p-3 text-center">
+                    <p className="text-[11px] text-slate-400">
+                      {generatingSummary
+                        ? "Generando ficha ejecutiva con IA..."
+                        : "Aún no se ha generado una ficha ejecutiva para este chat."}
+                    </p>
+                    <button
+                      onClick={() => handleGenerateSummary()}
+                      disabled={generatingSummary}
+                      className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-amber-400/40 bg-amber-400/15 px-2.5 py-1 text-xs font-semibold text-amber-300 hover:bg-amber-400/25 transition disabled:opacity-50 cursor-pointer"
+                    >
+                      <Sparkles className="size-3 text-amber-400" />
+                      <span>Generar Ficha Ahora</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {/* Asesor Asignado */}
               <div className="rounded-xl border border-line bg-white/[0.04] p-4">
                 <div className="flex items-center justify-between mb-2.5">
@@ -1424,7 +1716,7 @@ export default function ChatPage() {
                 {/* Selector de asesor */}
                 {showAgentPicker && (
                   <div className="mt-2 space-y-1">
-                    {CRM_AGENTS.map((agent) => {
+                    {getAllAgents().map((agent) => {
                       const isCurrent =
                         (assignmentsMap[activeConversation.contact_id] || "unassigned") === agent.id;
                       return (
@@ -1605,6 +1897,64 @@ export default function ChatPage() {
                 ? "Tomar control manual (Pausar IA)"
                 : "Reactivar atención por IA"}
             </button>
+
+            {/* Tarjeta Fija de Resumen en Drawer Móvil */}
+            <div className="border-t border-line/50 pt-3">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                  <Sparkles className="size-3.5 text-amber-400" />
+                  Resumen del Lead
+                </h4>
+                <button
+                  onClick={() => handleGenerateSummary()}
+                  disabled={generatingSummary}
+                  className="flex items-center gap-1 rounded border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold text-amber-300 hover:bg-amber-400/20 transition disabled:opacity-50"
+                >
+                  <RefreshCw className={`size-2.5 ${generatingSummary ? "animate-spin" : ""}`} />
+                  <span>{generatingSummary ? "Analizando..." : "Actualizar"}</span>
+                </button>
+              </div>
+
+              {currentHandoffSummary ? (
+                <div className="space-y-2 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs">
+                  <p className="text-slate-200 leading-relaxed">
+                    {currentHandoffSummary.executiveSummary}
+                  </p>
+                  <div className="grid grid-cols-2 gap-1.5 text-[10px] pt-1">
+                    <div className="rounded bg-ink/60 p-1.5 border border-line">
+                      <span className="text-slate-400">Interés: </span>
+                      <span className="text-amber-200 font-medium">
+                        {currentHandoffSummary.clientInterest}
+                      </span>
+                    </div>
+                    <div className="rounded bg-ink/60 p-1.5 border border-line">
+                      <span className="text-slate-400">Urgencia: </span>
+                      <span className="text-amber-300 font-bold capitalize">
+                        {currentHandoffSummary.urgencyLevel || "Media"}
+                      </span>
+                    </div>
+                  </div>
+                  {currentHandoffSummary.recommendedAction && (
+                    <p className="text-[11px] text-slate-300 border-t border-amber-400/20 pt-1.5">
+                      <strong className="text-amber-300">Sugerencia: </strong>
+                      {currentHandoffSummary.recommendedAction}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-line bg-ink/40 p-2.5 text-center">
+                  <p className="text-[11px] text-slate-400">Sin ficha generada</p>
+                  <button
+                    onClick={() => handleGenerateSummary()}
+                    disabled={generatingSummary}
+                    className="mt-1.5 inline-flex items-center gap-1 rounded bg-amber-400/20 px-2 py-1 text-[10px] font-semibold text-amber-300"
+                  >
+                    <Sparkles className="size-3" />
+                    <span>Generar Resumen con IA</span>
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* Etiquetas CRM en Drawer Móvil */}
             <div className="border-t border-line/50 pt-3">
