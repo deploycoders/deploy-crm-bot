@@ -1,9 +1,16 @@
 import { GoogleGenAI } from "@google/genai";
 import { getActiveBotConfig, buildDynamicSystemPrompt } from "./botConfig";
 
-const apiKey = process.env.GEMINI_API_KEY || "";
+export function isGeminiKeyConfigured(): boolean {
+  const key = process.env.GEMINI_API_KEY;
+  return Boolean(key && !key.includes("placeholder") && key.trim().length > 10);
+}
 
-const ai = new GoogleGenAI({ apiKey });
+export function getGenAIClient(): GoogleGenAI | null {
+  const key = process.env.GEMINI_API_KEY;
+  if (!isGeminiKeyConfigured() || !key) return null;
+  return new GoogleGenAI({ apiKey: key.trim() });
+}
 
 export interface ConversationMessage {
   sender: "client" | "bot" | "agent" | "system";
@@ -42,6 +49,11 @@ async function callWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promi
 }
 
 async function callGeminiWithFallback(prompt: string, systemInstruction?: string): Promise<string> {
+  const ai = getGenAIClient();
+  if (!ai) {
+    throw new Error("GEMINI_API_KEY no configurada o es placeholder");
+  }
+
   let lastError: unknown;
   const config = await getActiveBotConfig();
   const instruction = systemInstruction || buildDynamicSystemPrompt(config);
@@ -125,8 +137,9 @@ export async function transcribeAudioWithGemini(
   audioBuffer: Buffer,
   mimeType: string
 ): Promise<string> {
-  if (!apiKey) {
-    return "Nota de voz recibida (Gemini API key no configurada)";
+  const ai = getGenAIClient();
+  if (!ai) {
+    return "Nota de voz recibida (Gemini API key no configurada o es placeholder)";
   }
 
   const normalizedMime = normalizeAudioMimeType(mimeType);
@@ -257,7 +270,6 @@ export async function transcribeAudioWithGemini(
   return "🎤 Nota de voz recibida (transcripción no disponible en este momento)";
 }
 
-
 /**
  * Genera una Ficha Ejecutiva de Transferencia (Handoff) para el asesor humano
  */
@@ -273,7 +285,7 @@ export async function generateHandoffSummary(
     recommendedAction: "Saludar cordialmente, validar los requerimientos del proyecto y cotizar.",
   };
 
-  if (!apiKey) return fallback;
+  if (!isGeminiKeyConfigured()) return fallback;
 
   try {
     const formatted = history
@@ -325,16 +337,130 @@ Genera una ficha ejecutiva de transferencia para el asesor humano en formato JSO
   return fallback;
 }
 
+/**
+ * Motor conversacional de respaldo inteligente cuando la IA no está disponible o falla
+ * Maneja temas fuera de alcance, selección de opciones y pedidos de asesor con fluidez
+ */
+export function getIntelligentFallback(newMessage: string): AIResponse {
+  const text = (newMessage || "").toLowerCase().trim();
+
+  // 1. Detección de temas ajenos a tecnología o software (mascotas, perros, comida, medicina, etc.)
+  if (
+    /perr[oa]|mascota|animal|adop|veterinar|cachorr|medic[oa]|salud|enferm|receta|comida|restaurante|abogad[oa]|zapat[oa]|ropa/i.test(
+      text
+    )
+  ) {
+    return {
+      replyText:
+        "¡Hola! 👋 En *Deploy* nos dedicamos **exclusivamente al desarrollo de software y soluciones tecnológicas** (páginas web, chatbots con IA para WhatsApp y automatizaciones empresariales) 🚀.\n\nActualmente no ofrecemos ni gestionamos servicios ajenos a la tecnología como el que mencionas. ¿Tienes algún requerimiento digital, sitio web o bot en el que te podamos apoyar?",
+      requestHandoff: false,
+    };
+  }
+
+  // 2. Opción 2 o Consulta de Servicios
+  if (
+    text === "2" ||
+    text.startsWith("2.") ||
+    text.includes("servicio") ||
+    text.includes("desarrollo") ||
+    text.includes("web") ||
+    text.includes("landing") ||
+    text.includes("chatbot") ||
+    text.includes("bot") ||
+    text.includes("automatiz")
+  ) {
+    return {
+      replyText:
+        "🚀 *Servicios y Soluciones Tecnológicas en Deploy:*\n\n" +
+        "• 🌐 *Desarrollo Web & Landing Pages:* Páginas web de alto impacto, ultra rápidas y enfocadas en conversión.\n" +
+        "• 🤖 *Chatbots de WhatsApp con IA:* Asistentes inteligentes 24/7 conectados a tu CRM y WhatsApp Cloud API.\n" +
+        "• ⚙️ *Automatizaciones & Cloud:* Integraciones a medida (APIs, AppSheet) y despliegue en la nube.\n\n" +
+        "¿Te gustaría que un asesor comercial revise tu proyecto o deseas más detalles de algún servicio en particular?",
+      requestHandoff: false,
+    };
+  }
+
+  // 3. Opción 1 o FAQs
+  if (
+    text === "1" ||
+    text.startsWith("1.") ||
+    text.includes("faq") ||
+    text.includes("pregunta") ||
+    text.includes("pago") ||
+    text.includes("tiempo")
+  ) {
+    return {
+      replyText:
+        "📋 *Preguntas Frecuentes (FAQ) - Deploy:*\n\n" +
+        "• *Modalidad de Trabajo:* Metodología ágil con entregas por fases.\n" +
+        "• *Tiempos:* Landing pages listas entre 3 y 7 días hábiles según el requerimiento.\n" +
+        "• *Formas de Pago:* Pago Móvil, transferencias bancarias nacionales, Binance Pay (USDT) y divisas en efectivo.\n\n" +
+        "¿Deseas que te conectemos con un asesor para cotizar un requerimiento específico?",
+      requestHandoff: false,
+    };
+  }
+
+  // 4. Opción 3 o Soporte
+  if (
+    text === "3" ||
+    text.startsWith("3.") ||
+    text.includes("soporte") ||
+    text.includes("incidencia") ||
+    text.includes("falla") ||
+    text.includes("problema") ||
+    text.includes("error")
+  ) {
+    return {
+      replyText:
+        "🛠️ *Soporte Técnico Especializado - Deploy:*\n\n" +
+        "Brindamos mantenimiento preventivo, corrección de incidencias y monitoreo de sistemas activos de Deploy.\n\n" +
+        "Por favor descríbenos brevemente la situación o escribe *4* para transferirte con un técnico humano.",
+      requestHandoff: false,
+    };
+  }
+
+  // 5. Opción 4 o Asesor / Cotización / Precios (Handoff automático)
+  if (
+    text === "4" ||
+    text.startsWith("4.") ||
+    text.includes("asesor") ||
+    text.includes("humano") ||
+    text.includes("persona") ||
+    text.includes("cotiz") ||
+    text.includes("precio") ||
+    text.includes("costo") ||
+    text.includes("presupuesto") ||
+    text.includes("contratar")
+  ) {
+    return {
+      replyText:
+        "¡Con mucho gusto! 🤝 Te estoy transfiriendo en este momento con uno de nuestros asesores comerciales para darte una atención personalizada y revisar los requerimientos de tu proyecto.",
+      requestHandoff: true,
+      handoffReason: "Solicitud directa de asesor o cotización",
+    };
+  }
+
+  // 6. Saludo inicial o petición de menú explícito
+  return {
+    replyText:
+      "¡Hola! 👋 Bienvenido a *Deploy*. Somos especialistas en desarrollo de software, sitios web y chatbots con Inteligencia Artificial.\n\n" +
+      "📌 *¿En qué te podemos colaborar hoy?*\n" +
+      "1️⃣ *FAQ:* Preguntas frecuentes y formas de pago\n" +
+      "2️⃣ *Servicios:* Desarrollo web, chatbots y automatizaciones\n" +
+      "3️⃣ *Soporte:* Incidencias y diagnóstico técnico\n" +
+      "4️⃣ *Asesor:* Conectar con un especialista humano\n\n" +
+      "*(Escribe el número de la opción que prefieras o cuéntanos tu proyecto)* 🚀",
+    requestHandoff: false,
+  };
+}
+
 export async function generateAIResponse(
   history: ConversationMessage[],
   newMessage: string
 ): Promise<AIResponse> {
-  if (!apiKey) {
-    console.error("GEMINI_API_KEY no está configurada");
-    return {
-      replyText: "Hola, gracias por comunicarte con Deploy. En este momento estamos configurando el asistente virtual.",
-      requestHandoff: false,
-    };
+  if (!isGeminiKeyConfigured()) {
+    console.warn("ℹ️ GEMINI_API_KEY no configurada o es placeholder. Respondiendo mediante motor inteligente integrado.");
+    return getIntelligentFallback(newMessage);
   }
 
   try {
@@ -350,21 +476,18 @@ ${formattedHistory}
 Mensaje(s) reciente(s) recibido(s) del cliente (pueden ser varios acumulados):
 "${newMessage}"
 
-INSTRUCCIONES CLAVE PARA ESTA RESPUESTA:
-1. Responde a TODAS las preguntas o temas mencionados por el cliente en UN SOLO MENSAJE completo y bien estructurado.
-2. MANTÉN EL MENÚ EN LA CONVERSACIÓN: incluye o recapitula al final las opciones del menú principal (1️⃣ FAQ, 2️⃣ Servicios, 3️⃣ Soporte, 4️⃣ Asesor) o un pie claro para que el cliente continúe interactuando.
-3. Genera la respuesta en el formato JSON indicado.`;
+INSTRUCCIONES CLAVE DE ATENCIÓN:
+1. FLUIDEZ Y NATURALIDAD: Sé empático, ágil, humano y profesional. Responde directamente a lo que el cliente plantea de forma fluida.
+2. NUNCA REPITAS EL MENÚ EN CADA MENSAJE: Si el cliente ya eligió una opción o está conversando, responde directamente al tema seleccionado y formula una pregunta de seguimiento para avanzar. NO copies y pegues el menú de opciones (1, 2, 3, 4) a menos que el cliente explícitamente escriba 'menú' o sea el primer mensaje de la conversación.
+3. ESTRICTO ALCANCE DE DEPLOY: En Deploy nos dedicamos EXCLUSIVAMENTE al desarrollo de software y tecnología (sitios web, chatbots con IA para WhatsApp, automatizaciones y soporte en la nube). Si el cliente pregunta por un tema ajeno (ej: adoptar o comprar perros/animales, medicina, comida, etc.), aclara con respeto y cortesía que en Deploy solo ofrecemos soluciones tecnológicas y desarrollo de software, y pregunta si tiene alguna necesidad tecnológica para su negocio.
+4. Genera la respuesta en el formato JSON indicado.`;
 
     const text = await callGeminiWithFallback(prompt);
 
     return extractCleanReply(text);
   } catch (error) {
-    console.error("Error al generar respuesta con Gemini (todos los modelos fallaron):", error);
-    return {
-      replyText: "¡Hola! 👋 Bienvenido a Deploy. ¿En qué servicio o consulta tecnológica te podemos ayudar hoy?\n\n📌 *Menú de Opciones:*\n1️⃣ *FAQ:* Preguntas frecuentes y formas de pago\n2️⃣ *Servicios:* Desarrollo web, chatbots y automatizaciones\n3️⃣ *Soporte:* Incidencias y diagnóstico técnico\n4️⃣ *Asesor:* Conectar con un especialista\n\n*(Escribe el número de la opción o 'Menú')* 🚀",
-      requestHandoff: false,
-      handoffReason: undefined,
-    };
+    console.error("Error al generar respuesta con Gemini, usando respuesta inteligente de respaldo:", error);
+    return getIntelligentFallback(newMessage);
   }
 }
 
