@@ -67,7 +67,7 @@ export function BottomNav() {
   return (
     <nav
       aria-label="Navegación móvil"
-      className="fixed bottom-0 left-0 right-0 z-50 md:hidden bg-[#051424]/95 backdrop-blur-xl border-t border-[#1c2b3c]/80 shadow-[0_-4px_20px_rgba(0,0,0,0.5)] px-2 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))]"
+      className="fixed bottom-0 left-0 right-0 z-50 md:hidden bg-[#051424]/95 backdrop-blur-xl border-t border-[#1c2b3c]/80 shadow-[0_-4px_20px_rgba(0,0,0,0.5)] px-2 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] [.chat-active-mobile_&]:hidden transition-all duration-200"
     >
       <div className="flex items-center justify-around max-w-md mx-auto">
         {navItems.map((item) => {

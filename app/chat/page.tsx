@@ -235,6 +235,22 @@ export default function ChatPage() {
   // Sheet modal de información del contacto en móvil
   const [showMobileDetails, setShowMobileDetails] = useState(false);
 
+  // Sincronizar clase en body para ocultar BottomNav cuando se está dentro de un chat en móvil
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      if (mobileView === "chat") {
+        document.body.classList.add("chat-active-mobile");
+      } else {
+        document.body.classList.remove("chat-active-mobile");
+      }
+    }
+    return () => {
+      if (typeof window !== "undefined") {
+        document.body.classList.remove("chat-active-mobile");
+      }
+    };
+  }, [mobileView]);
+
   // Filtros y búsqueda
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<FilterStatus>("all");
@@ -796,8 +812,8 @@ export default function ChatPage() {
   const waitingCount = conversations.filter((c) => c.status === "waiting_agent").length;
 
   return (
-    <div className="h-[calc(100dvh-4rem)] p-2 sm:p-3 md:p-4 flex flex-col overflow-hidden">
-      <div className="mx-auto flex h-full w-full max-w-7xl flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel/85 shadow-2xl backdrop-blur-xl">
+    <div className="h-full w-full p-0 md:p-3 lg:p-4 flex flex-col overflow-hidden">
+      <div className="mx-auto flex h-full w-full max-w-7xl flex-1 flex-col overflow-hidden rounded-none md:rounded-2xl border-0 md:border md:border-line bg-panel/90 shadow-none md:shadow-2xl backdrop-blur-xl">
         {/* Contenedor Principal: En tablet y desktop (md+) muestra lista y chat lado a lado. En móvil conmuta entre lista y chat */}
         <div className="relative flex flex-1 overflow-hidden w-full">
         {/* ============================================================== */}
@@ -896,7 +912,7 @@ export default function ChatPage() {
           </div>
 
           {/* Lista scrolleable de chats */}
-          <div className="flex-1 overflow-y-auto overscroll-contain p-2 sm:p-2.5 space-y-1.5">
+          <div className="flex-1 overflow-y-auto overscroll-contain p-2 sm:p-2.5 space-y-1.5 pb-20 md:pb-3">
             {loading ? (
               <div className="p-8 text-center text-sm text-slate-400">
                 <div className="mx-auto size-6 animate-spin rounded-full border-2 border-signal border-t-transparent mb-2" />
@@ -1014,13 +1030,14 @@ export default function ChatPage() {
           {activeConversation ? (
             <>
               {/* Encabezado del Chat */}
-              <div className="flex items-center justify-between border-b border-line bg-panel/90 px-3 py-2.5 sm:px-4 sm:py-3 z-10 shrink-0">
-                <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+              <div className="flex items-center justify-between border-b border-line bg-panel/95 px-2.5 py-2 sm:px-4 sm:py-3 z-10 shrink-0">
+                <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
                   {/* Botón Volver (solo en móvil) */}
                   <button
                     onClick={() => setMobileView("list")}
-                    className="grid size-9 place-items-center rounded-lg border border-line bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 md:hidden transition active:scale-95 shrink-0"
+                    className="grid size-9 place-items-center rounded-xl border border-line bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 md:hidden transition active:scale-95 shrink-0"
                     aria-label="Volver a la lista de chats"
+                    title="Volver a la lista"
                   >
                     <ArrowLeft className="size-4" />
                   </button>
@@ -1028,21 +1045,21 @@ export default function ChatPage() {
                   {/* Avatar e Identificación del Lead */}
                   <button
                     onClick={() => setShowMobileDetails(true)}
-                    className="flex min-w-0 items-center gap-2.5 text-left group"
+                    className="flex min-w-0 items-center gap-2 sm:gap-2.5 text-left group"
                   >
-                    <span className="grid size-9 sm:size-10 place-items-center rounded-xl bg-signal/15 font-bold text-signal ring-1 ring-signal/30 shrink-0">
+                    <span className="grid size-9 sm:size-10 place-items-center rounded-xl bg-signal/15 font-bold text-signal ring-1 ring-signal/30 shrink-0 text-xs sm:text-sm">
                       {(activeConversation.contacts?.name || "CL").substring(0, 2).toUpperCase()}
                     </span>
                     <div className="min-w-0">
-                      <h2 className="truncate text-sm sm:text-base font-semibold text-white group-hover:text-signal transition">
+                      <h2 className="truncate text-xs sm:text-base font-bold text-white group-hover:text-signal transition max-w-[120px] xs:max-w-[160px] sm:max-w-[220px]">
                         {activeConversation.contacts?.name || activeConversation.contacts?.phone}
                       </h2>
                       <div className="flex items-center gap-1.5">
                         <span
                           className={`size-1.5 rounded-full ${getStatusLabel(activeConversation.status).dotColor}`}
                         />
-                        <span className="text-[11px] text-slate-400 truncate">
-                          {getStatusLabel(activeConversation.status).text}
+                        <span className="text-[10px] sm:text-[11px] text-slate-400 truncate max-w-[110px] sm:max-w-[180px]">
+                          {activeConversation.contacts?.phone || getStatusLabel(activeConversation.status).text}
                         </span>
                       </div>
                     </div>
@@ -1050,9 +1067,9 @@ export default function ChatPage() {
                 </div>
 
                 {/* Acciones del Encabezado */}
-                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                  {/* Botones de Navegación Rápida de Mensajes */}
-                  <div className="flex items-center rounded-lg border border-line bg-white/5 p-0.5">
+                <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                  {/* Botones de Navegación Rápida de Mensajes (Solo en desktop/tablet) */}
+                  <div className="hidden sm:flex items-center rounded-lg border border-line bg-white/5 p-0.5">
                     <button
                       onClick={() => scrollToTop("smooth")}
                       className="grid size-7 sm:size-8 place-items-center rounded-md text-slate-400 hover:text-white hover:bg-white/10 transition"
@@ -1071,26 +1088,38 @@ export default function ChatPage() {
                     </button>
                   </div>
 
+                  {/* Link directo a WhatsApp Oficial */}
+                  {activeConversation.contacts?.phone && (
+                    <a
+                      href={`https://wa.me/${activeConversation.contacts.phone.replace(/\D/g, "")}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="grid size-8 sm:size-9 place-items-center rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition active:scale-95"
+                      title="Abrir chat en WhatsApp oficial"
+                    >
+                      <MessageSquare className="size-3.5 sm:size-4" />
+                    </a>
+                  )}
+
                   {/* Botón Intervenir / Reactivar IA */}
                   <button
                     onClick={toggleStatus}
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition active:scale-95 ${
+                    className={`inline-flex items-center gap-1 sm:gap-1.5 rounded-lg border px-2 sm:px-2.5 py-1.5 text-[11px] sm:text-xs font-semibold transition active:scale-95 ${
                       activeConversation.status === "ai_active"
                         ? "border-amber-400/30 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20"
                         : "border-signal/30 bg-signal/10 text-signal hover:bg-signal/20"
                     }`}
+                    title={activeConversation.status === "ai_active" ? "Tomar control manual" : "Reactivar Bot IA"}
                   >
                     {activeConversation.status === "ai_active" ? (
                       <>
-                        <Zap className="size-3.5" />
-                        <span className="hidden sm:inline">Intervenir (Tomar control)</span>
-                        <span className="sm:hidden">Intervenir</span>
+                        <Zap className="size-3 sm:size-3.5" />
+                        <span className="hidden sm:inline">Intervenir</span>
                       </>
                     ) : (
                       <>
-                        <RotateCcw className="size-3.5" />
-                        <span className="hidden sm:inline">Reactivar IA</span>
-                        <span className="sm:hidden">Reactivar</span>
+                        <RotateCcw className="size-3 sm:size-3.5" />
+                        <span className="hidden sm:inline">Bot IA</span>
                       </>
                     )}
                   </button>
@@ -1100,6 +1129,7 @@ export default function ChatPage() {
                     onClick={() => setShowMobileDetails(true)}
                     className="grid size-8 sm:size-9 place-items-center rounded-lg border border-line bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 xl:hidden transition active:scale-95"
                     aria-label="Ver detalles del contacto"
+                    title="Ficha del Lead"
                   >
                     <Info className="size-4" />
                   </button>
@@ -1204,41 +1234,43 @@ export default function ChatPage() {
                         );
                       }
 
+                      const isClient = message.sender === "client";
+                      const isOutgoing = isAgent || isBot;
+
                       return (
                         <div
                           key={message.id}
-                          className={`flex ${isAgent ? "justify-end" : "justify-start"}`}
+                          className={`flex w-full ${isOutgoing ? "justify-end" : "justify-start"}`}
                         >
                           <div
-                            className={`max-w-[85%] sm:max-w-[72%] rounded-2xl border px-3.5 py-2.5 sm:px-4 sm:py-3 text-xs sm:text-sm leading-relaxed shadow-md break-words ${
+                            className={`max-w-[88%] sm:max-w-[75%] rounded-2xl border px-3 py-2 sm:px-4 sm:py-2.5 text-xs sm:text-sm leading-relaxed shadow-md break-words ${
                               isAgent
                                 ? "rounded-tr-xs border-sky-400/30 bg-sky-500/20 text-sky-50 shadow-sky-950/20"
                                 : isBot
-                                ? "rounded-tl-xs border-signal/25 bg-signal/12 text-emerald-50 shadow-emerald-950/20"
+                                ? "rounded-tr-xs border-signal/25 bg-signal/15 text-emerald-50 shadow-emerald-950/20"
                                 : "rounded-tl-xs border-line bg-white/[0.08] text-slate-100 shadow-black/20"
                             }`}
                           >
                             {/* Identificador del Emisor */}
-                            <div className="mb-1 flex items-center justify-between gap-3 text-[10px] sm:text-[11px] font-semibold text-slate-400">
+                            <div className="mb-1 flex items-center justify-between gap-2.5 text-[10px] sm:text-[11px] font-semibold text-slate-400">
                               <span className="flex items-center gap-1">
                                 {isBot && <Bot className="size-3 text-signal" />}
                                 {isAgent && <UserRound className="size-3 text-sky-300" />}
+                                {isClient && <span className="size-1.5 rounded-full bg-slate-400" />}
                                 <span
                                   className={
                                     isBot
-                                      ? "text-signal"
+                                      ? "text-signal font-bold"
                                       : isAgent
-                                      ? "text-sky-300"
-                                      : "text-slate-300"
+                                      ? "text-sky-300 font-bold"
+                                      : "text-slate-300 font-medium"
                                   }
                                 >
                                   {isBot ? "Bot IA" : isAgent ? "Tú (Asesor)" : "Cliente"}
                                 </span>
                               </span>
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[10px] text-slate-500 font-normal">
-                                  {formatMessageTime(message.created_at)}
-                                </span>
+                              <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-normal shrink-0">
+                                <span>{formatMessageTime(message.created_at)}</span>
                                 {isAgent && (
                                   <span title="Entregado por WhatsApp" className="text-sky-300 inline-flex items-center">
                                     <CheckCheck className="size-3 text-sky-400" />
@@ -1248,7 +1280,9 @@ export default function ChatPage() {
                             </div>
 
                             {/* Contenido del Mensaje limpio de artefactos JSON si los hubiera */}
-                            <p className="whitespace-pre-wrap">{cleanJsonArtifacts(message.content)}</p>
+                            <p className="whitespace-pre-wrap text-[13px] sm:text-sm text-slate-100 font-normal">
+                              {cleanJsonArtifacts(message.content)}
+                            </p>
                           </div>
                         </div>
                       );
@@ -1288,8 +1322,7 @@ export default function ChatPage() {
               </div>
 
               {/* Barra de Entrada Pinned al fondo */}
-              {/* Barra de Entrada Pinned al fondo */}
-              <div className="relative border-t border-line bg-panel/95 p-2.5 sm:p-3 shrink-0">
+              <div className="relative border-t border-line bg-panel/95 p-2 sm:p-3 pb-[max(0.6rem,env(safe-area-inset-bottom))] shrink-0 z-20">
                 {/* Popover Flotante de Respuestas Rápidas */}
                 {showQuickRepliesMenu && (
                   <div className="absolute bottom-16 left-3 right-3 sm:left-4 sm:right-auto sm:w-96 rounded-2xl border border-signal/40 bg-panel/95 p-3 shadow-2xl backdrop-blur-xl z-30 space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-150">
@@ -1352,11 +1385,21 @@ export default function ChatPage() {
                   </div>
                 )}
 
+                {/* Micro Banner Bot Activo */}
                 {activeConversation.status === "ai_active" && (
-                  <p className="mb-1.5 px-1 text-[11px] text-amber-300/90 flex items-center gap-1.5">
-                    <span className="size-1.5 rounded-full bg-amber-400" />
-                    El Bot está activo. Al responder tomarás el control manual como asesor.
-                  </p>
+                  <div className="mb-1.5 px-2.5 py-1 rounded-lg bg-amber-400/10 border border-amber-400/20 text-[10px] sm:text-[11px] text-amber-300 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5 truncate">
+                      <span className="size-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                      <span className="truncate">Bot IA activo • Tu respuesta tomará el control</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={toggleStatus}
+                      className="text-[10px] font-bold text-amber-200 underline hover:text-white shrink-0 ml-2"
+                    >
+                      Pausar
+                    </button>
+                  </div>
                 )}
 
                 <form onSubmit={handleSendMessage} className="flex items-center gap-1.5 sm:gap-2">
@@ -1387,7 +1430,7 @@ export default function ChatPage() {
                   </button>
 
                   {/* Input de Texto */}
-                  <div className="flex min-w-0 flex-1 items-center rounded-xl border border-line bg-ink/70 px-3 py-1.5 focus-within:border-signal/50 transition">
+                  <div className="flex min-w-0 flex-1 items-center rounded-xl border border-line bg-ink/70 px-2.5 py-1.5 sm:px-3 sm:py-2 focus-within:border-signal/50 transition">
                     <input
                       ref={inputRef}
                       type="text"
@@ -1401,11 +1444,7 @@ export default function ChatPage() {
                           setShowQuickRepliesMenu(false);
                         }
                       }}
-                      placeholder={
-                        activeConversation.status === "ai_active"
-                          ? "Escribe para intervenir o '/' para respuestas rápidas..."
-                          : "Escribe tu respuesta o '/' para snippets..."
-                      }
+                      placeholder="Escribe un mensaje... (/ atajos)"
                       className="min-w-0 flex-1 bg-transparent text-xs sm:text-sm text-white placeholder:text-slate-500 outline-none"
                     />
                   </div>

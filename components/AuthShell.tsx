@@ -66,6 +66,8 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
     return "Deploy Cockpit";
   };
 
+  const isChatPage = pathname.startsWith("/chat");
+
   return (
     <>
       <GlobalNotifications />
@@ -75,8 +77,13 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
 
         {/* Zona de contenido principal adaptativa */}
         <div className="pl-0 md:pl-72 transition-all">
-          {/* Header Mobile Sticky (Diseño de la Referencia) */}
-          <header className="md:hidden sticky top-0 z-40 bg-[#051424]/95 backdrop-blur-xl border-b border-[#1c2b3c]/80 px-4 py-2.5 flex items-center justify-between">
+          {/* Header Mobile Sticky: En /chat la vista móvil tiene su propio encabezado con navegación de chat */}
+          <header
+            data-mobile-header
+            className={`md:hidden sticky top-0 z-40 bg-[#051424]/95 backdrop-blur-xl border-b border-[#1c2b3c]/80 px-4 py-2.5 items-center justify-between [.chat-active-mobile_&]:hidden ${
+              isChatPage ? "hidden" : "flex"
+            }`}
+          >
             <div className="flex items-center gap-2.5">
               <div className="size-8 rounded-lg bg-primary/10 border border-primary/25 flex items-center justify-center text-primary shadow-sm">
                 <span className="material-symbols-outlined text-[20px]">smart_toy</span>
@@ -147,8 +154,14 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
             </div>
           </header>
 
-          {/* Main Area */}
-          <main className="relative pt-0 md:pt-16 pb-20 md:pb-8 bg-background min-h-screen">
+          {/* Main Area: En /chat ocupa 100dvh sin scroll exterior ni paddings que desborden */}
+          <main
+            className={`relative bg-background ${
+              isChatPage
+                ? "pt-0 md:pt-16 pb-0 md:pb-0 h-[100dvh] md:h-screen overflow-hidden"
+                : "pt-0 md:pt-16 pb-20 md:pb-8 min-h-screen"
+            }`}
+          >
             {children}
           </main>
         </div>
