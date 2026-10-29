@@ -213,21 +213,19 @@ export async function POST(request: NextRequest) {
               .eq("id", conversationId);
           }
 
-          // Si el cliente estaba en waiting_agent o human_takeover pero escribe pidiendo el bot o seleccionando opciones del menú
+          // Un nuevo mensaje del cliente reactiva siempre la atención automática.
+          // Así, una intervención previa del asesor no deja el chat silenciado.
           if (convStatus === "waiting_agent" || convStatus === "human_takeover") {
-            const wantsBot = /^(bot|menu|menú|reiniciar|activar bot|volver|inicio|opciones|1|2|3|4)$/i.test(messageText.trim());
-            if (wantsBot) {
-              convStatus = "ai_active";
-              await supabase
-                .from("conversations")
-                .update({ status: "ai_active" })
-                .eq("id", conversationId);
-              await supabase.from("messages").insert({
-                conversation_id: conversationId,
-                sender: "system",
-                content: "El cliente solicitó interactuar nuevamente con el Bot IA.",
-              });
-            }
+            convStatus = "ai_active";
+            await supabase
+              .from("conversations")
+              .update({ status: "ai_active" })
+              .eq("id", conversationId);
+            await supabase.from("messages").insert({
+              conversation_id: conversationId,
+              sender: "system",
+              content: "Atención automática reactivada al recibir un nuevo mensaje del cliente.",
+            });
           }
 
           if (convStatus === "ai_active" && conversationId) {

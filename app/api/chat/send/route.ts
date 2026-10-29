@@ -213,7 +213,8 @@ export async function POST(request: NextRequest) {
     await supabase
       .from("conversations")
       .update({
-        status: "human_takeover",
+        // Los mensajes manuales no desactivan las respuestas automáticas.
+        status: "ai_active",
         last_message_preview: savedContent,
         last_message_at: new Date().toISOString(),
       })
