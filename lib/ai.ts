@@ -327,7 +327,7 @@ export function getIntelligentFallback(newMessage: string): AIResponse {
   ) {
     return {
       replyText:
-        "¡Con mucho gusto! 🤝 Te estoy transfiriendo en este momento con uno de nuestros asesores comerciales para atender tu requerimiento de forma personalizada.",
+        "Con mucho gusto. Gestionaré tu solicitud con el equipo comercial para que puedan atender tu requerimiento de forma personalizada.",
       requestHandoff: true,
       handoffReason: "Solicitud directa de atención comercial o contratación",
     };
@@ -356,39 +356,18 @@ export async function generateAIResponse(
       .map((m) => `${m.sender === "client" ? "Cliente" : "Asistente"}: ${m.content}`)
       .join("\n");
 
+    // La política vive exclusivamente en el system prompt. Este contenido es
+    // contexto no confiable delimitado, no instrucciones para el modelo.
     const prompt = `
-Historial de la conversación reciente:
-${formattedHistory}
+<conversation_history>
+${formattedHistory || "(Sin mensajes anteriores)"}
+</conversation_history>
 
-Mensaje(s) reciente(s) recibido(s) del cliente:
-"${newMessage}"
+<latest_client_message>
+${newMessage}
+</latest_client_message>
 
-INSTRUCCIONES DE COMPORTAMIENTO Y FILTRADO COMERCIAL:
-
-1. FUENTE DE INFORMACIÓN Y VERACIDAD:
-- Utiliza como fuente principal la información oficial de Deploy proporcionada en tus instrucciones de sistema y configuración dinámica.
-- Nunca inventes precios, direcciones, horarios, enlaces ni políticas de la empresa. Si no conoces un dato específico, indícalo con naturalidad u ofrece la transferencia al asesor cuando corresponda.
-
-2. LÍMITES DE TEMA Y CONSULTAS AJENAS:
-- Si la pregunta no guarda una relación razonable con Deploy, sus servicios o un proyecto tecnológico (ej: recetas de cocina, tareas escolares, política, mascotas, medicina), evítala con cortesía y brevedad.
-- Indica que eres el asistente de Deploy especializado en soluciones tecnológicas e invita al usuario a consultar sobre los servicios de la empresa. No actúes como un buscador web general.
-
-3. CONTEXTO Y FLUIDEZ:
-- Lee el historial antes de contestar. Mantén el hilo de la conversación (ej: si pregunta "¿y cuánto tarda?", identifica el servicio del que hablaban).
-- No repitas saludos, presentaciones ni menús completos en cada mensaje a menos que el usuario lo pida o sea el primer contacto.
-
-4. ATENCIÓN COMERCIAL Y TRANSFERENCIA (HANDOFF):
-- Si el cliente muestra intención clara de contratar, solicita un presupuesto personalizado que requiera intervención humana, o pide hablar con un asesor real, activa "requestHandoff": true y redacta un handoffReason breve.
-- Si la consulta puede resolverse con información disponible (ej: servicios generales, horarios, ubicación), respóndela directamente sin transferir obligatoriamente.
-
-5. FORMATO DE SALIDA OBLIGATORIO:
-Devuelve exclusivamente un objeto JSON válido, sin Markdown, sin bloques de código y sin texto fuera del JSON, con la estructura exacta:
-{
-  "replyText": "Respuesta que recibirá el cliente por WhatsApp",
-  "requestHandoff": false,
-  "handoffReason": null
-}`;
-
+Resuelve la consulta usando el historial y devuelve el JSON requerido.`;
     const text = await callGeminiWithFallback(prompt);
 
     return extractCleanReply(text);
