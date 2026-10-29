@@ -187,18 +187,25 @@ export async function POST(request: NextRequest) {
     }
 
     // ── 3. Guardar mensaje en Supabase ────────────────────────────────────────
+    const messageInsertData: Record<string, unknown> = {
+      conversation_id: conversationId,
+      sender: "agent",
+      content: savedContent,
+    };
+
+    if (mediaUrl) {
+      messageInsertData.media_url = mediaUrl;
+      messageInsertData.media_type = type;
+    }
+
     const { data: newMsg, error: msgError } = await supabase
       .from("messages")
-      .insert({
-        conversation_id: conversationId,
-        sender: "agent",
-        content: savedContent,
-        ...(waResult.messageId ? { wa_message_id: waResult.messageId } : {}),
-      })
+      .insert(messageInsertData)
       .select()
       .single();
 
     if (msgError) {
+      console.error("[send] Error guardando mensaje en Supabase:", msgError);
       throw msgError;
     }
 
@@ -223,6 +230,7 @@ export async function POST(request: NextRequest) {
       success: true,
       message: newMsg,
       whatsappDelivered: waResult.success,
+      ...(waResult.error ? { whatsappError: waResult.error } : {}),
       rateLimitRemaining: rl.remaining,
     });
   } catch (error: unknown) {

@@ -553,11 +553,18 @@ export default function ChatPage() {
         }),
       });
 
+      const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        console.error("Error al enviar mensaje vía API:", errData);
+        console.error("Error al enviar mensaje vía API:", data);
         resetRateLimit(rlKey); // Permitir retry inmediato si falla
+        setInputText(textToSend); // Restaurar texto
+        alert(data.error || "No se pudo enviar el mensaje.");
       } else {
+        if (!data.whatsappDelivered) {
+          const detail = data.whatsappError?.error?.message || (typeof data.whatsappError === "string" ? data.whatsappError : "Meta rechazó el mensaje");
+          alert(`⚠️ El mensaje se guardó en el CRM, pero WhatsApp Cloud API no lo entregó:\n${detail}`);
+        }
         // Auditar el envío
         audit("agent:message_sent", {
           conversationId: selectedId,
@@ -570,6 +577,8 @@ export default function ChatPage() {
     } catch (err: unknown) {
       console.error("Error al enviar mensaje:", err);
       resetRateLimit(rlKey);
+      setInputText(textToSend);
+      alert("Error de conexión al enviar el mensaje. Inténtalo nuevamente.");
     } finally {
       setSending(false);
       inputRef.current?.focus();
@@ -604,7 +613,13 @@ export default function ChatPage() {
         }),
       });
 
+      const data = await res.json().catch(() => ({}));
+
       if (res.ok) {
+        if (!data.whatsappDelivered) {
+          const detail = data.whatsappError?.error?.message || "WhatsApp Cloud API no pudo entregar el archivo.";
+          alert(`⚠️ Se guardó en el CRM pero falló la entrega en WhatsApp:\n${detail}`);
+        }
         setShowMediaModal(false);
         setMediaUrl("");
         setMediaCaption("");
@@ -612,10 +627,11 @@ export default function ChatPage() {
         await fetchMessages(selectedId);
         await fetchConversations();
       } else {
-        alert("Error al enviar archivo por WhatsApp");
+        alert(data.error || "Error al enviar archivo por WhatsApp");
       }
     } catch (err) {
       console.error("Error enviando media:", err);
+      alert("Error de red al enviar el archivo.");
     } finally {
       setSendingMedia(false);
     }

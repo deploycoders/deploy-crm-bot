@@ -7,8 +7,8 @@ export async function sendWhatsAppMessage(toPhone: string, text: string) {
     return { success: false, error: "Credenciales de WhatsApp no configuradas" };
   }
 
-  // Quitar el '+' si viene incluido
-  const formattedPhone = toPhone.replace("+", "").trim();
+  // Limpiar número: eliminar '+', espacios, guiones y cualquier carácter no numérico
+  const formattedPhone = toPhone.replace(/\D/g, "").trim();
 
   try {
     const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
@@ -62,7 +62,8 @@ export async function sendWhatsAppImage(
     return { success: false, error: "Credenciales de WhatsApp no configuradas" };
   }
 
-  const formattedPhone = toPhone.replace("+", "").trim();
+  // Limpiar número: eliminar '+', espacios, guiones y cualquier carácter no numérico
+  const formattedPhone = toPhone.replace(/\D/g, "").trim();
 
   try {
     const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
@@ -116,7 +117,8 @@ export async function sendWhatsAppDocument(
     return { success: false, error: "Credenciales de WhatsApp no configuradas" };
   }
 
-  const formattedPhone = toPhone.replace("+", "").trim();
+  // Limpiar número: eliminar '+', espacios, guiones y cualquier carácter no numérico
+  const formattedPhone = toPhone.replace(/\D/g, "").trim();
 
   try {
     const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
