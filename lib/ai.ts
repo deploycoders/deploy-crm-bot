@@ -32,10 +32,8 @@ export interface HandoffSummary {
 
 // Modelos en orden de velocidad, disponibilidad y estabilidad
 const GEMINI_MODELS = [
-  "gemini-2.0-flash",               // Más rápido y disponible (recomendado)
-  "gemini-2.5-flash-preview-04-17", // Más capaz, preview
-  "gemini-1.5-flash",               // Fallback estable
-  "gemini-1.5-pro",                 // Último recurso
+  "gemini-3-flash-preview",
+  "gemini-3.1-flash-lite-preview",
 ];
 
 async function callWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -70,7 +68,7 @@ async function callGeminiWithFallback(prompt: string, systemInstruction?: string
             temperature: 0.3,
           },
         }),
-        8000
+        15000
       );
       console.log(`✅ Éxito con modelo: ${model}`);
       return response.text || "{}";
@@ -300,45 +298,68 @@ Genera una ficha ejecutiva de transferencia para el asesor humano en formato JSO
 /**
  * Motor conversacional de respaldo inteligente cuando la IA no está disponible
  */
-export function getIntelligentFallback(newMessage: string): AIResponse {
+export function getIntelligentFallback(
+  newMessage: string,
+  history: ConversationMessage[] = []
+): AIResponse {
   const text = (newMessage || "").toLowerCase().trim();
+  const recentContext = history.slice(-6).map((message) => message.content.toLowerCase()).join(" ");
+  const context = `${recentContext} ${text}`;
 
-  // 1. Temas ajenos o triviales obvios
-  if (
-    /receta|cocina|perr[oa]|mascota|animal|veterinar|medic[oa]|salud|enferm|abogad[oa]|zapat[oa]|ropa|politica|faram|receta/i.test(
-      text
-    )
-  ) {
+  if (/receta|cocina|perr[oa]|mascota|veterinar|medic[oa]|salud|enferm|abogad[oa]|pol[ií]tica|religión/i.test(text)) {
     return {
-      replyText:
-        "Soy el asistente virtual de Deploy y estoy especializado exclusivamente en nuestras soluciones tecnológicas y desarrollo de software. ¿Tienes algún proyecto digital o requerimiento en el que te pueda ayudar?",
+      replyText: "Soy el asistente de Deploy y puedo ayudarte con servicios, páginas web, automatizaciones y proyectos tecnológicos. ¿Qué necesitas para tu negocio?",
       requestHandoff: false,
     };
   }
 
-  // 2. Solicitud directa de asesor / contratación / precios complejos
-  if (
-    text.includes("asesor") ||
-    text.includes("humano") ||
-    text.includes("persona") ||
-    text.includes("contratar") ||
-    text.includes("precio exacto") ||
-    text.includes("cotización personalizada")
-  ) {
+  if (/asesor|humano|persona real|llamarme|contáctenme|contactarme/.test(text)) {
     return {
-      replyText:
-        "Con mucho gusto. Gestionaré tu solicitud con el equipo comercial para que puedan atender tu requerimiento de forma personalizada.",
+      replyText: "Claro, gestionaré tu solicitud con el equipo comercial para que puedan atenderte de forma personalizada.",
       requestHandoff: true,
-      handoffReason: "Solicitud directa de atención comercial o contratación",
+      handoffReason: "El cliente solicitó atención humana",
     };
   }
 
-  // 3. Respuesta estándar de respaldo
-  return {
-    replyText:
-      "¡Hola! 👋 Bienvenido a *Deploy*. Somos especialistas en desarrollo de software, páginas web y chatbots con Inteligencia Artificial.\n\n¿En qué te podemos colaborar hoy o qué proyecto tecnológico tienes en mente?",
-    requestHandoff: false,
-  };
+  if (/quiero contratar|quiero comprar|quiero comenzar|iniciar el proyecto|cotización personalizada|presupuesto formal|propuesta formal/.test(text)) {
+    return {
+      replyText: "Excelente. Para preparar una propuesta adecuada, gestionaré tu solicitud con el equipo comercial.",
+      requestHandoff: true,
+      handoffReason: "Intención de contratación o cotización personalizada",
+    };
+  }
+
+  if (/cuánto tarda|cuanto tarda|tiempo de entrega|plazo/.test(text)) {
+    if (/landing|página|pagina|web|sitio/.test(context)) {
+      return { replyText: "El tiempo depende del alcance. Como referencia, una landing page suele entregarse entre 3 y 7 días hábiles; una web corporativa puede requerir más según sus secciones y funciones. ¿Qué tipo de página necesitas?", requestHandoff: false };
+    }
+    return { replyText: "El tiempo de entrega depende del alcance y las funcionalidades del proyecto. ¿Sobre cuál servicio o proyecto quieres conocer el plazo?", requestHandoff: false };
+  }
+
+  if (/precio|precios|cuánto cuesta|cuanto cuesta|presupuesto|cotización|cotizacion/.test(text)) {
+    if (/landing|página|pagina|web|sitio/.test(context)) {
+      return { replyText: "El costo de una página web depende de las secciones, diseño y funcionalidades necesarias. Para orientarte mejor, ¿buscas una landing page para captar clientes o una web corporativa con varias secciones?", requestHandoff: false };
+    }
+    return { replyText: "El precio depende del alcance del proyecto. Cuéntame qué necesitas automatizar, desarrollar o mejorar y te orientaré con los datos necesarios para cotizarlo.", requestHandoff: false };
+  }
+
+  if (/página|pagina|sitio web|web corporativa|landing/.test(text)) {
+    return { replyText: "Sí, podemos desarrollar una página ejecutiva para tu empresa, adaptada a móviles y enfocada en presentar tus servicios. ¿Buscas una landing page para captar contactos o una web corporativa con secciones como servicios, nosotros y contacto?", requestHandoff: false };
+  }
+
+  if (/chatbot|whatsapp|bot/.test(text)) {
+    return { replyText: "Podemos crear un chatbot para WhatsApp que atienda consultas frecuentes, califique clientes y automatice procesos según tu negocio. ¿Qué tipo de mensajes o tareas quieres automatizar?", requestHandoff: false };
+  }
+
+  if (/automat|integraci|api|pedido|crm|proceso/.test(text)) {
+    return { replyText: "Sí, podemos evaluar una automatización para reducir tareas repetitivas e integrar tus procesos. ¿Qué ocurre hoy y qué resultado te gustaría automatizar?", requestHandoff: false };
+  }
+
+  if (/^(hola|buenas|buenos días|buenas tardes|buenas noches)[!. ]*$/i.test(text)) {
+    return { replyText: "¡Hola! Soy el asistente de Deploy. Puedo ayudarte con páginas web, software, chatbots y automatizaciones. ¿Qué necesitas para tu negocio?", requestHandoff: false };
+  }
+
+  return { replyText: "Gracias por contarnos. Para orientarte mejor, ¿qué objetivo tiene tu proyecto o qué problema de tu negocio te gustaría resolver?", requestHandoff: false };
 }
 
 export async function generateAIResponse(
@@ -347,7 +368,7 @@ export async function generateAIResponse(
 ): Promise<AIResponse> {
   if (!isGeminiKeyConfigured()) {
     console.warn("ℹ️ GEMINI_API_KEY no configurada. Respondiendo mediante motor inteligente integrado.");
-    return getIntelligentFallback(newMessage);
+    return getIntelligentFallback(newMessage, history);
   }
 
   try {
@@ -373,7 +394,7 @@ Resuelve la consulta usando el historial y devuelve el JSON requerido.`;
     return extractCleanReply(text);
   } catch (error) {
     console.error("Error al generar respuesta con Gemini, usando respuesta inteligente de respaldo:", error);
-    return getIntelligentFallback(newMessage);
+    return getIntelligentFallback(newMessage, history);
   }
 }
 
