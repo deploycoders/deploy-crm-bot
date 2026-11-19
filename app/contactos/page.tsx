@@ -15,6 +15,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { CRM_TAGS, getAllTagsMap } from "@/lib/tags";
 import { exportLeadsToCSV } from "@/lib/export";
+import { useAuth } from "@/context/AuthContext";
 
 interface ContactItem {
   id: string;
@@ -30,6 +31,7 @@ interface ContactItem {
 }
 
 export default function ContactosPage() {
+  const { activeTenant } = useAuth();
   const [contacts, setContacts] = useState<ContactItem[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [loading, setLoading] = useState(true);
@@ -39,18 +41,30 @@ export default function ContactosPage() {
     try {
       setTagsMap(getAllTagsMap());
 
-      // 1. Obtener contactos
-      const { data: contactsData, error: contactsError } = await supabase
+      // 1. Obtener contactos del tenant activo
+      let contactsQuery = supabase
         .from("contacts")
         .select("*")
         .order("created_at", { ascending: false });
 
+      if (activeTenant?.id) {
+        contactsQuery = contactsQuery.eq("tenant_id", activeTenant.id);
+      }
+
+      const { data: contactsData, error: contactsError } = await contactsQuery;
+
       if (contactsError) throw contactsError;
 
-      // 2. Obtener conversaciones asociadas
-      const { data: convData } = await supabase
+      // 2. Obtener conversaciones asociadas del tenant activo
+      let convQuery = supabase
         .from("conversations")
         .select("id, contact_id, status, last_message_preview, last_message_at");
+
+      if (activeTenant?.id) {
+        convQuery = convQuery.eq("tenant_id", activeTenant.id);
+      }
+
+      const { data: convData } = await convQuery;
 
       const convMap = new Map();
       convData?.forEach((c) => {
@@ -72,7 +86,27 @@ export default function ContactosPage() {
 
   useEffect(() => {
     fetchContacts();
-  }, []);
+
+    if (!activeTenant?.id) return;
+    const channelName = `contactos-realtime-${activeTenant.id}`;
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "contacts",
+          filter: `tenant_id=eq.${activeTenant.id}`,
+        },
+        () => fetchContacts()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeTenant?.id]);
 
   const filteredContacts = contacts.filter((c) => {
     const term = searchTerm.toLowerCase();

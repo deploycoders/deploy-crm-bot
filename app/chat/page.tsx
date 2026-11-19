@@ -50,6 +50,7 @@ import {
 import { createAuditor } from "@/lib/audit";
 import { useAuth } from "@/context/AuthContext";
 import { rateLimit, resetRateLimit } from "@/lib/permissions";
+import { tenantRequestHeaders } from "@/lib/tenantClient";
 
 interface Contact {
   id: string;
@@ -216,7 +217,7 @@ const DEMO_CHAT_MESSAGES: Record<string, Message[]> = {
 };
 
 export default function ChatPage() {
-  const { user } = useAuth();
+  const { user, activeTenant } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>(DEMO_CHAT_CONVERSATIONS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -224,10 +225,11 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
 
-  // Auditor pre-configurado con el usuario actual
+  // Auditor pre-configurado con el usuario y tenant actual
   const audit = createAuditor(
     user?.id ?? "unknown",
-    user?.name ?? "Asesor"
+    user?.name ?? "Asesor",
+    activeTenant?.id
   );
 
   // Mobile state navigation: "list" (lista de chats) o "chat" (chat activo)
@@ -311,10 +313,14 @@ export default function ChatPage() {
     setQuickReplies(getQuickReplies());
   }, []);
 
-  // Comprobar si la conversación está fuera de la ventana de 24 horas de Meta
+  // Comprobar si la conversación está fuera de la ventana de 24 horas de Meta (según último mensaje del cliente)
   const isOutside24HoursWindow = useMemo(() => {
-    if (!activeConversation || !activeConversation.last_message_at) return false;
-    const lastMsgTime = new Date(activeConversation.last_message_at).getTime();
+    if (!activeConversation) return false;
+    const refDate =
+      (activeConversation as any).last_customer_message_at ||
+      activeConversation.last_message_at;
+    if (!refDate) return false;
+    const lastMsgTime = new Date(refDate).getTime();
     const now = Date.now();
     const hoursDifference = (now - lastMsgTime) / (1000 * 60 * 60);
     return hoursDifference > 24;
@@ -417,15 +423,23 @@ export default function ChatPage() {
   // 1. Cargar lista de conversaciones
   const fetchConversations = async () => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("conversations")
         .select("*, contacts(*)")
         .order("last_message_at", { ascending: false });
+
+      if (activeTenant?.id) {
+        query = query.eq("tenant_id", activeTenant.id);
+      }
+
+      const { data, error } = await query;
 
       if (error) {
         console.warn("Aviso al consultar Supabase (usando datos locales de respaldo):", error.message);
       } else if (data && data.length > 0) {
         setConversations(data as Conversation[]);
+      } else if (!error && data && data.length === 0) {
+        setConversations([]);
       }
 
       // Si no hay id seleccionado, fijar el inicial
@@ -453,11 +467,17 @@ export default function ChatPage() {
   // 2. Cargar mensajes de la conversación activa
   const fetchMessages = async (convId: string) => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("messages")
         .select("*")
         .eq("conversation_id", convId)
         .order("created_at", { ascending: true });
+
+      if (activeTenant?.id) {
+        query = query.eq("tenant_id", activeTenant.id);
+      }
+
+      const { data, error } = await query;
 
       if (error) {
         console.warn("Aviso al cargar mensajes de Supabase:", error.message);
@@ -484,21 +504,27 @@ export default function ChatPage() {
 
   useEffect(() => {
     fetchConversations();
-  }, []);
+  }, [activeTenant?.id]);
 
   useEffect(() => {
     if (selectedId) {
       fetchMessages(selectedId);
     }
-  }, [selectedId]);
+  }, [selectedId, activeTenant?.id]);
 
-  // 3. Suscripción a Supabase Realtime
+  // 3. Suscripción a Supabase Realtime aislada por tenant
   useEffect(() => {
+    const channelName = `chat-realtime-${activeTenant?.id || "global"}`;
     const channel = supabase
-      .channel("chat-realtime")
+      .channel(channelName)
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          ...(activeTenant?.id ? { filter: `tenant_id=eq.${activeTenant.id}` } : {}),
+        },
         (payload) => {
           const newMsg = payload.new as Message;
           if (newMsg.conversation_id === selectedId) {
@@ -522,7 +548,12 @@ export default function ChatPage() {
       )
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "conversations" },
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "conversations",
+          ...(activeTenant?.id ? { filter: `tenant_id=eq.${activeTenant.id}` } : {}),
+        },
         (payload) => {
           const updatedConv = payload.new as Conversation;
           setConversations((prev) =>
@@ -542,7 +573,7 @@ export default function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedId, conversations]);
+  }, [selectedId, conversations, activeTenant?.id]);
 
   // 4. Enviar mensaje como asesor humano
   const handleSendMessage = async (e?: React.FormEvent) => {
@@ -558,9 +589,10 @@ export default function ChatPage() {
     setSending(true);
 
     try {
+      const headers = await tenantRequestHeaders(activeTenant?.id);
       const res = await fetch("/api/chat/send", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           conversationId: selectedId,
           text: textToSend,
@@ -598,6 +630,40 @@ export default function ChatPage() {
     } finally {
       setSending(false);
       inputRef.current?.focus();
+    }
+  };
+
+  // Enviar Plantilla Oficial de Meta cuando la ventana de 24h está cerrada
+  const handleSendTemplate = async (templateName: string = "seguimiento_comercial") => {
+    if (!selectedId || sending) return;
+    setSending(true);
+    try {
+      const headers = await tenantRequestHeaders(activeTenant?.id);
+      const res = await fetch("/api/chat/send", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          conversationId: selectedId,
+          type: "template",
+          templateName,
+          text: `Plantilla oficial enviada: ${templateName}`,
+          agentId: user?.id ?? "unknown",
+          agentName: user?.name ?? "Asesor",
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "No se pudo enviar la plantilla.");
+      } else {
+        await fetchMessages(selectedId);
+        await fetchConversations();
+      }
+    } catch (err) {
+      console.error("Error enviando plantilla:", err);
+      alert("Error de conexión al enviar la plantilla.");
+    } finally {
+      setSending(false);
     }
   };
 
@@ -671,19 +737,28 @@ export default function ChatPage() {
       // Intentar persistir en Supabase si está disponible (asíncrono protegido)
       (async () => {
         try {
-          await supabase
+          let updateQuery = supabase
             .from("conversations")
             .update({ status: newStatus })
             .eq("id", activeConversation.id);
 
-          await supabase.from("messages").insert({
+          if (activeTenant?.id) {
+            updateQuery = updateQuery.eq("tenant_id", activeTenant.id);
+          }
+          await updateQuery;
+
+          const msgPayload: Record<string, any> = {
             conversation_id: activeConversation.id,
             sender: "system",
             content:
               newStatus === "human_takeover"
                 ? "El asesor ha tomado el control manual de la conversación."
                 : "Se ha reactivado la atención automática con Inteligencia Artificial.",
-          });
+          };
+          if (activeTenant?.id) {
+            msgPayload.tenant_id = activeTenant.id;
+          }
+          await supabase.from("messages").insert(msgPayload);
         } catch {
           // Ignorar si la red de Supabase está offline
         }
@@ -715,9 +790,10 @@ export default function ChatPage() {
 
     try {
       setGeneratingSummary(true);
+      const headers = await tenantRequestHeaders(activeTenant?.id);
       const res = await fetch("/api/chat/summary", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           conversationId: targetId,
           reason: "Atención por Asesor Humano",
@@ -1366,22 +1442,23 @@ export default function ChatPage() {
 
                 {/* Alerta de Ventana de 24 Horas de WhatsApp */}
                 {isOutside24HoursWindow && (
-                  <div className="mb-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-200 flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <AlertCircle className="size-3.5 text-amber-400 shrink-0" />
-                      <span>⚠️ Fuera de ventana de 24h de WhatsApp. El cliente debe escribir o debes enviar una plantilla.</span>
+                  <div className="mb-2 rounded-xl border border-amber-400/40 bg-amber-400/10 p-2 text-xs text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="size-4 text-amber-400 shrink-0" />
+                      <span>
+                        <strong>Ventana de 24h cerrada:</strong> Para evitar el error 131047 de Meta, debes enviar una plantilla preaprobada para retomar contacto.
+                      </span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setInputText(
-                          "¡Hola! Un gusto saludarte nuevamente desde Deploy 🚀. ¿En qué podemos colaborar con tu proyecto hoy?"
-                        )
-                      }
-                      className="text-[10px] font-bold underline text-amber-300 hover:text-white shrink-0 ml-2"
-                    >
-                      Cargar Saludo
-                    </button>
+                    <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleSendTemplate("seguimiento_comercial")}
+                        disabled={sending}
+                        className="px-2.5 py-1 rounded-lg bg-amber-400 text-[#003824] hover:bg-amber-300 font-bold text-[11px] transition disabled:opacity-50"
+                      >
+                        Enviar Plantilla Meta
+                      </button>
+                    </div>
                   </div>
                 )}
 

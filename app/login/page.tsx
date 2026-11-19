@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { SUPERADMIN_USER, saveSession } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
@@ -31,10 +30,6 @@ export default function LoginPage() {
     }
   };
 
-  const handleQuickAccess = () => {
-    saveSession(SUPERADMIN_USER);
-    window.location.href = "/";
-  };
 
   return (
     <div className="relative min-h-screen flex items-center justify-center p-4 overflow-hidden bg-background selection:bg-primary/30 selection:text-primary">
@@ -173,17 +168,14 @@ export default function LoginPage() {
               </span>
             </button>
 
-            {/* Acceso Rápido / Demo Administrador */}
-            <button
-              type="button"
-              onClick={handleQuickAccess}
-              className="w-full rounded-xl border border-surface-container-high hover:border-primary/40 bg-surface-container/60 hover:bg-surface-container px-4 py-2.5 text-xs font-semibold text-on-surface transition flex items-center justify-center gap-2"
-            >
-              <span className="material-symbols-outlined text-secondary text-[16px]">
-                bolt
+            {/* Credenciales de acceso oficial */}
+            <div className="rounded-xl border border-surface-container-high/60 bg-surface-container/40 p-3 text-xs text-on-surface-variant flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-[11px]">
+                <span className="material-symbols-outlined text-primary text-[14px]">lock</span>
+                <span>Acceso estricto con cuenta de Supabase</span>
               </span>
-              <span>Entrar directo como Super Administrador</span>
-            </button>
+              <span className="text-[10px] text-outline font-mono">v2.0 Tenant</span>
+            </div>
           </form>
 
           {/* Información de seguridad */}

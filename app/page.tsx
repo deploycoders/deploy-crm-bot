@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/context/AuthContext";
 
 interface ConversationRow {
   id: string;
@@ -104,6 +105,7 @@ const isSupabaseMisconfigured =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY.includes("placeholder");
 
 export default function DashboardPage() {
+  const { activeTenant } = useAuth();
   const [conversations, setConversations] = useState<ConversationRow[]>(INITIAL_DEMO_CONVERSATIONS);
   const [totalContacts, setTotalContacts] = useState<number>(7);
   const [loading, setLoading] = useState(false);
@@ -131,11 +133,17 @@ export default function DashboardPage() {
     if (isSupabaseMisconfigured) return;
     try {
       setLoading(true);
-      const { data, error } = await supabase
+      let query = supabase
         .from("conversations")
         .select("*, contacts(*)")
         .order("last_message_at", { ascending: false })
         .limit(50);
+
+      if (activeTenant?.id) {
+        query = query.eq("tenant_id", activeTenant.id);
+      }
+
+      const { data, error } = await query;
 
       if (!error && data && data.length > 0) {
         const mapped: ConversationRow[] = data.map((c: any, index: number) => {
@@ -164,18 +172,27 @@ export default function DashboardPage() {
         });
         setConversations(mapped);
         setLastSyncSeconds(0);
+      } else if (!error && data && data.length === 0) {
+        setConversations([]);
+        setLastSyncSeconds(0);
       }
 
-      const { count } = await supabase
+      let countQuery = supabase
         .from("contacts")
         .select("*", { count: "exact", head: true });
-      if (count !== null && count > 0) setTotalContacts(count);
+
+      if (activeTenant?.id) {
+        countQuery = countQuery.eq("tenant_id", activeTenant.id);
+      }
+
+      const { count } = await countQuery;
+      if (count !== null) setTotalContacts(count);
     } catch (err) {
       console.warn("Usando datos de respaldo para el Cockpit:", err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeTenant?.id]);
 
   useEffect(() => {
     if (!isSupabaseMisconfigured) {
@@ -183,15 +200,21 @@ export default function DashboardPage() {
     }
   }, [loadData]);
 
-  // Suscripción Realtime
+  // Suscripción Realtime aislada por tenant
   useEffect(() => {
     if (isSupabaseMisconfigured || !autoSync) return;
 
+    const channelName = `dashboard-realtime-${activeTenant?.id || "global"}`;
     const channel = supabase
-      .channel("dashboard-realtime")
+      .channel(channelName)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "conversations" },
+        {
+          event: "*",
+          schema: "public",
+          table: "conversations",
+          ...(activeTenant?.id ? { filter: `tenant_id=eq.${activeTenant.id}` } : {}),
+        },
         () => loadData()
       )
       .subscribe();
@@ -199,7 +222,7 @@ export default function DashboardPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadData, autoSync]);
+  }, [loadData, autoSync, activeTenant?.id]);
 
   // Filtrado reactivo de conversaciones
   const filteredConversations = useMemo(() => {

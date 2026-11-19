@@ -7,12 +7,14 @@ import {
   ArrowRight,
   Bell,
   BellOff,
+  Building2,
   Check,
   CheckCircle2,
   ChevronDown,
   Clock,
   Edit2,
   ExternalLink,
+  Mail,
   MessageSquare,
   Plus,
   RefreshCw,
@@ -20,11 +22,14 @@ import {
   Shield,
   Trash2,
   UserCheck,
+  UserCheck2,
   UserPlus,
   Users,
   Zap,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/context/AuthContext";
+import { tenantRequestHeaders } from "@/lib/tenantClient";
 import {
   CRMAgent,
   getAllAgents,
@@ -65,6 +70,17 @@ interface AgentStats {
   activeCount: number;
   resolvedCount: number;
   conversations: ConversationData[];
+}
+
+export interface OrgMember {
+  userId: string;
+  tenantId: string;
+  role: "owner" | "admin" | "agent";
+  isActive: boolean;
+  createdAt: string;
+  email: string;
+  name: string;
+  avatar?: string;
 }
 
 // Datos de demostración cuando Supabase está en configuración inicial
@@ -163,6 +179,7 @@ const DEMO_EQUIPO_CONVERSATIONS: ConversationData[] = [
 ];
 
 export default function EquipoPage() {
+  const { activeTenant, user } = useAuth();
   const [conversations, setConversations] = useState<ConversationData[]>(DEMO_EQUIPO_CONVERSATIONS);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -173,7 +190,21 @@ export default function EquipoPage() {
   >("unavailable");
   const [refreshing, setRefreshing] = useState(false);
 
-  // Lista dinamica de asesores
+  // Pestaña activa: Miembros de la Organización vs Distribución de Leads
+  const [activeSection, setActiveSection] = useState<"members" | "distribution">("members");
+
+  // Miembros reales del Tenant en Supabase
+  const [orgMembers, setOrgMembers] = useState<OrgMember[]>([]);
+  const [loadingOrgMembers, setLoadingOrgMembers] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [inviteRole, setInviteRole] = useState<"owner" | "admin" | "agent">("agent");
+  const [inviteTempPassword, setInviteTempPassword] = useState("");
+  const [inviting, setInviting] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+
+  // Lista dinamica de asesores locales
   const [teamAgents, setTeamAgents] = useState<CRMAgent[]>([]);
 
   // Modal para gestionar asesores
@@ -200,12 +231,35 @@ export default function EquipoPage() {
     setTeamAgents(getAllAgents());
   };
 
+  const fetchOrgMembers = async () => {
+    if (!activeTenant?.id) return;
+    setLoadingOrgMembers(true);
+    try {
+      const headers = await tenantRequestHeaders(activeTenant.id);
+      const res = await fetch("/api/team/members", { headers });
+      const data = await res.json();
+      if (data.success && data.members) {
+        setOrgMembers(data.members);
+      }
+    } catch (err) {
+      console.warn("Error cargando miembros del tenant:", err);
+    } finally {
+      setLoadingOrgMembers(false);
+    }
+  };
+
   const fetchData = async () => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("conversations")
         .select("*, contacts(*)")
         .order("last_message_at", { ascending: false });
+
+      if (activeTenant?.id) {
+        query = query.eq("tenant_id", activeTenant.id);
+      }
+
+      const { data, error } = await query;
 
       if (!error && data && data.length > 0) {
         setConversations(data as ConversationData[]);
@@ -220,14 +274,13 @@ export default function EquipoPage() {
 
   useEffect(() => {
     fetchData();
+    fetchOrgMembers();
     reloadAgents();
     setAssignmentsMap(getAllAssignmentsMap());
 
-    // Estado de notificaciones push
     setPushPermission(getNotificationPermission());
     setPushEnabledState(isPushEnabled());
 
-    // Escuchar eventos de cambio de asignacion entre pestanas y componentes
     const handleAssignmentChange = () => {
       setAssignmentsMap(getAllAssignmentsMap());
     };
@@ -239,12 +292,17 @@ export default function EquipoPage() {
     window.addEventListener("crm:assignment-change", handleAssignmentChange);
     window.addEventListener("crm:agents-updated", handleAgentsUpdated);
 
-    // Actualizaciones en tiempo real con Supabase
+    const channelName = `equipo-realtime-${activeTenant?.id || "global"}`;
     const channel = supabase
-      .channel("equipo-realtime")
+      .channel(channelName)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "conversations" },
+        {
+          event: "*",
+          schema: "public",
+          table: "conversations",
+          ...(activeTenant?.id ? { filter: `tenant_id=eq.${activeTenant.id}` } : {}),
+        },
         () => {
           fetchData();
           setAssignmentsMap(getAllAssignmentsMap());
@@ -257,7 +315,88 @@ export default function EquipoPage() {
       window.removeEventListener("crm:agents-updated", handleAgentsUpdated);
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [activeTenant?.id]);
+
+  const handleInviteSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inviteEmail.trim() || !activeTenant?.id) return;
+    setInviting(true);
+    setInviteError(null);
+
+    try {
+      const headers = await tenantRequestHeaders(activeTenant.id);
+      const res = await fetch("/api/team/invite", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          email: inviteEmail.trim(),
+          name: inviteName.trim() || undefined,
+          role: inviteRole,
+          temporaryPassword: inviteTempPassword.trim() || undefined,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setInviteError(data.error || "Error al invitar miembro");
+      } else {
+        setShowInviteModal(false);
+        setInviteEmail("");
+        setInviteName("");
+        setInviteTempPassword("");
+        fetchOrgMembers();
+        setAssignmentToast({
+          contactName: data.member?.name || inviteEmail,
+          agentName: `Rol: ${data.member?.role || inviteRole}`,
+          agentColor: "#0df2a3",
+          isUnassigned: false,
+        });
+        setTimeout(() => setAssignmentToast(null), 3500);
+      }
+    } catch (err: any) {
+      setInviteError(err?.message || "Error al conectar con el servidor.");
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  const handleRemoveMember = async (targetUserId: string, memberEmail: string) => {
+    if (!confirm(`¿Estás seguro de eliminar a ${memberEmail} de la organización?`)) return;
+    try {
+      const headers = await tenantRequestHeaders(activeTenant?.id);
+      const res = await fetch(`/api/team/members?userId=${targetUserId}`, {
+        method: "DELETE",
+        headers,
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchOrgMembers();
+      } else {
+        alert(data.error || "No se pudo remover el miembro");
+      }
+    } catch {
+      alert("Error al comunicarse con el servidor");
+    }
+  };
+
+  const handleUpdateRole = async (targetUserId: string, newRole: "owner" | "admin" | "agent") => {
+    try {
+      const headers = await tenantRequestHeaders(activeTenant?.id);
+      const res = await fetch("/api/team/members", {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ userId: targetUserId, role: newRole }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchOrgMembers();
+      } else {
+        alert(data.error || "No se pudo actualizar el rol");
+      }
+    } catch {
+      alert("Error al comunicarse con el servidor");
+    }
+  };
 
   // Handlers para crear, editar o eliminar asesores
   const handleSaveAgentSubmit = (e: React.FormEvent) => {
@@ -533,6 +672,18 @@ export default function EquipoPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Botón Invitar al Equipo */}
+            <button
+              onClick={() => {
+                setInviteError(null);
+                setShowInviteModal(true);
+              }}
+              className="flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-xs font-bold text-[#003824] hover:bg-emerald-300 transition cursor-pointer shadow-sm active:scale-95"
+            >
+              <UserPlus className="size-3.5" />
+              <span>Invitar al Equipo</span>
+            </button>
+
             {/* Boton Gestionar Asesores */}
             <button
               onClick={() => {
@@ -541,8 +692,8 @@ export default function EquipoPage() {
               }}
               className="flex items-center gap-2 rounded-lg border border-signal/40 bg-signal/10 px-3.5 py-2 text-xs font-semibold text-signal hover:bg-signal/20 transition cursor-pointer shadow-sm active:scale-95"
             >
-              <UserPlus className="size-3.5" />
-              <span>Gestionar Asesores</span>
+              <Users className="size-3.5" />
+              <span>Turnos Asesores</span>
             </button>
 
             {/* Boton Notificaciones Push */}
@@ -606,8 +757,156 @@ export default function EquipoPage() {
           </div>
         )}
 
-        {/* Tarjetas de Metricas Globales */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {/* Pestañas de Sección */}
+        <div className="flex items-center gap-2 border-b border-line pb-3">
+          <button
+            type="button"
+            onClick={() => setActiveSection("members")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+              activeSection === "members"
+                ? "bg-primary/20 text-primary border border-primary/30"
+                : "text-slate-400 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            <Building2 className="size-4" />
+            <span>Miembros del Tenant ({orgMembers.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSection("distribution")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+              activeSection === "distribution"
+                ? "bg-primary/20 text-primary border border-primary/30"
+                : "text-slate-400 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            <Users className="size-4" />
+            <span>Distribución de Leads ({conversations.length})</span>
+          </button>
+        </div>
+
+        {/* VISTA 1: MIEMBROS DE LA ORGANIZACIÓN */}
+        {activeSection === "members" && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <span>Organización:</span>
+                  <span className="text-primary font-mono">{activeTenant?.name || "Sin seleccionar"}</span>
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Usuarios que tienen acceso al CRM, mensajes de WhatsApp y base de datos de esta organización.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={fetchOrgMembers}
+                className="text-xs text-slate-400 hover:text-white flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className={`size-3.5 ${loadingOrgMembers ? "animate-spin" : ""}`} />
+                <span>Recargar miembros</span>
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-line bg-panel/70 backdrop-blur-xl overflow-hidden shadow-xl">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-surface-container-high/40 text-[11px] font-bold uppercase tracking-wider text-slate-400 border-b border-line">
+                    <tr>
+                      <th className="py-3 px-4">Miembro</th>
+                      <th className="py-3 px-4">Correo Electrónico</th>
+                      <th className="py-3 px-4">Rol en Tenant</th>
+                      <th className="py-3 px-4">Fecha de Alta</th>
+                      <th className="py-3 px-4 text-right">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line/60">
+                    {loadingOrgMembers && orgMembers.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-slate-400">
+                          <RefreshCw className="size-5 animate-spin mx-auto mb-2 text-primary" />
+                          <span>Cargando miembros de la organización...</span>
+                        </td>
+                      </tr>
+                    ) : orgMembers.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-slate-400">
+                          <Users className="size-6 mx-auto mb-2 text-slate-500" />
+                          <p className="font-semibold text-white">No hay miembros registrados todavía</p>
+                          <p className="text-xs text-slate-500 mt-1">
+                            Haz clic en &quot;Invitar al Equipo&quot; para sumar nuevos asesores o administradores.
+                          </p>
+                        </td>
+                      </tr>
+                    ) : (
+                      orgMembers.map((m) => {
+                        const isSelf = m.userId === user?.id;
+                        return (
+                          <tr key={m.userId} className="hover:bg-white/[0.02] transition">
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-2.5">
+                                <div className="size-8 rounded-lg bg-surface-container-high border border-primary/20 text-primary font-bold flex items-center justify-center text-xs">
+                                  {m.name.slice(0, 2).toUpperCase()}
+                                </div>
+                                <div>
+                                  <span className="font-semibold text-white block">
+                                    {m.name} {isSelf && <span className="text-[10px] text-primary">(Tú)</span>}
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 font-mono">ID: {m.userId.slice(0, 8)}...</span>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 text-slate-300 font-mono text-[11px]">
+                              {m.email}
+                            </td>
+                            <td className="py-3 px-4">
+                              <select
+                                value={m.role}
+                                disabled={isSelf}
+                                onChange={(e) => handleUpdateRole(m.userId, e.target.value as any)}
+                                className="bg-surface-container-high/80 border border-line rounded-lg px-2.5 py-1 text-xs text-white outline-none focus:border-primary disabled:opacity-60 cursor-pointer"
+                              >
+                                <option value="owner">Propietario (Owner)</option>
+                                <option value="admin">Administrador (Admin)</option>
+                                <option value="agent">Asesor (Agent)</option>
+                              </select>
+                            </td>
+                            <td className="py-3 px-4 text-slate-400">
+                              {new Date(m.createdAt).toLocaleDateString("es-ES", {
+                                year: "numeric",
+                                month: "short",
+                                day: "numeric",
+                              })}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              {!isSelf ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveMember(m.userId, m.email)}
+                                  className="text-rose-400 hover:text-rose-300 text-xs px-2.5 py-1 rounded-lg border border-rose-500/20 bg-rose-500/10 hover:bg-rose-500/20 transition cursor-pointer"
+                                >
+                                  Remover
+                                </button>
+                              ) : (
+                                <span className="text-[11px] text-slate-500 italic">Sesión actual</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VISTA 2: DISTRIBUCIÓN DE LEADS */}
+        {activeSection === "distribution" && (
+          <div className="space-y-6">
+            {/* Tarjetas de Metricas Globales */}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           {[
             {
               label: "Total Leads",
@@ -1049,6 +1348,8 @@ export default function EquipoPage() {
             </p>
           </div>
         )}
+          </div>
+        )}
 
       </div>
 
@@ -1224,6 +1525,120 @@ export default function EquipoPage() {
                 Cerrar
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL INVITAR AL EQUIPO */}
+      {showInviteModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => setShowInviteModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-line bg-panel p-6 shadow-2xl relative space-y-4"
+          >
+            <div className="flex items-center justify-between border-b border-line pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="grid size-9 place-items-center rounded-lg bg-primary/15 text-primary border border-primary/30">
+                  <UserPlus className="size-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Invitar al Equipo</h3>
+                  <p className="text-xs text-slate-400">
+                    Añade un colega a <strong className="text-white">{activeTenant?.name}</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowInviteModal(false)}
+                className="size-8 rounded-lg border border-line bg-white/5 text-slate-400 hover:text-white flex items-center justify-center transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleInviteSubmit} className="space-y-3.5">
+              <div>
+                <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                  Correo Electrónico *
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  placeholder="asesor@empresa.com"
+                  className="w-full rounded-xl border border-line bg-ink px-3.5 py-2 text-xs text-white placeholder:text-slate-600 outline-none focus:border-primary transition"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                  Nombre Completo
+                </label>
+                <input
+                  type="text"
+                  value={inviteName}
+                  onChange={(e) => setInviteName(e.target.value)}
+                  placeholder="Ej: Daniel Sánchez"
+                  className="w-full rounded-xl border border-line bg-ink px-3.5 py-2 text-xs text-white placeholder:text-slate-600 outline-none focus:border-primary transition"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                  Rol en la Organización *
+                </label>
+                <select
+                  value={inviteRole}
+                  onChange={(e) => setInviteRole(e.target.value as any)}
+                  className="w-full rounded-xl border border-line bg-ink px-3 py-2 text-xs text-white outline-none focus:border-primary cursor-pointer"
+                >
+                  <option value="agent">Asesor (Acceso a CRM, Chats y Contactos)</option>
+                  <option value="admin">Administrador (Acceso total, configuración e invitaciones)</option>
+                  <option value="owner">Propietario (Control absoluto del Tenant)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                  Contraseña Inicial (Opcional)
+                </label>
+                <input
+                  type="text"
+                  value={inviteTempPassword}
+                  onChange={(e) => setInviteTempPassword(e.target.value)}
+                  placeholder="Dejar vacío para autogenerar contraseña segura"
+                  className="w-full rounded-xl border border-line bg-ink px-3.5 py-2 text-xs text-white placeholder:text-slate-600 outline-none focus:border-primary transition font-mono"
+                />
+              </div>
+
+              {inviteError && (
+                <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl p-2.5">
+                  {inviteError}
+                </p>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-line">
+                <button
+                  type="button"
+                  onClick={() => setShowInviteModal(false)}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:bg-white/5 transition"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={inviting || !inviteEmail.trim()}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-primary text-[#003824] hover:bg-emerald-300 transition disabled:opacity-40"
+                >
+                  {inviting ? "Enviando invitación..." : "Guardar & Vincular"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -21,6 +21,9 @@ export interface AIResponse {
   replyText: string;
   requestHandoff: boolean;
   handoffReason?: string;
+  detectedIntent?: string;
+  conversationStage?: string;
+  detectedEntities?: Record<string, any>;
 }
 
 export interface HandoffSummary {
@@ -45,15 +48,22 @@ async function callWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promi
   ]);
 }
 
-async function callGeminiWithFallback(prompt: string, systemInstruction?: string): Promise<string> {
+async function callGeminiWithFallback(
+  prompt: string,
+  tenantId?: string,
+  systemInstruction?: string,
+  catalogContext?: string
+): Promise<string> {
   const ai = getGenAIClient();
   if (!ai) {
     throw new Error("GEMINI_API_KEY no configurada o es placeholder");
   }
 
   let lastError: unknown;
-  const config = await getActiveBotConfig();
-  const instruction = systemInstruction || buildDynamicSystemPrompt(config);
+  const config = tenantId ? await getActiveBotConfig(tenantId) : null;
+  const instruction =
+    systemInstruction ||
+    (config ? buildDynamicSystemPrompt(config, catalogContext) : "Eres un asistente comercial de ventas en WhatsApp.");
 
   for (const model of GEMINI_MODELS) {
     try {
@@ -229,6 +239,103 @@ export async function transcribeAudioWithGemini(
 }
 
 /**
+ * Analiza una imagen o foto enviada por el cliente mediante Gemini Visión multimodal.
+ * Compara visualmente con el catálogo real e identifica piezas, repuestos o productos.
+ */
+export async function analyzeImageWithGemini(
+  imageBuffer: Buffer,
+  mimeType: string,
+  catalogContext?: string,
+  userCaption?: string
+): Promise<{
+  description: string;
+  identifiedItems: string[];
+  suggestedReply?: string;
+}> {
+  const ai = getGenAIClient();
+  if (!ai) {
+    return {
+      description: userCaption || "Foto enviada por el cliente (Visión IA no configurada)",
+      identifiedItems: [],
+    };
+  }
+
+  const normalizedMime = mimeType.split(";")[0].trim().toLowerCase() || "image/jpeg";
+  const VISION_MODELS = [
+    "gemini-2.5-flash-preview-04-17",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+  ];
+
+  const visionPrompt = `
+Actúa como un analista experto en identificación visual técnica y comercial de productos, herramientas, piezas o repuestos para atención por WhatsApp.
+
+OBJETIVO:
+1. Inspecciona minuciosamente la imagen adjunta enviada por el cliente.
+${userCaption ? `Texto o consulta que el cliente incluyó con la foto: "${userCaption}"` : ""}
+2. Describe de manera técnica, precisa y clara lo que ves (tipo de objeto, características visibles, material, color, código/modelo impreso o estado de desgaste/daño).
+3. Contrasta con el catálogo de productos disponible a continuación:
+${catalogContext || "(Sin catálogo inyectado)"}
+
+REGLAS ESTRICTAS:
+- Si el objeto coincide con algún producto o repuesto del catálogo, identifícalo con su nombre o SKU.
+- Si no está en el catálogo, describe lo que es objetivamente sin forzar coincidencias falsas.
+- Devuelve ÚNICAMENTE un JSON con:
+{
+  "description": "Descripción clara de lo que se aprecia en la imagen",
+  "identifiedItems": ["Nombre o modelo del producto detectado o categoría de la pieza"],
+  "suggestedReply": "Respuesta directa para el cliente indicando qué se observa en la foto y qué opciones o alternativas de catálogo tenemos disponibles con precio."
+}`;
+
+  if (imageBuffer.length <= 10 * 1024 * 1024) {
+    for (const model of VISION_MODELS) {
+      try {
+        const response = await callWithTimeout(
+          ai.models.generateContent({
+            model,
+            contents: [
+              { text: visionPrompt },
+              {
+                inlineData: {
+                  mimeType: normalizedMime,
+                  data: imageBuffer.toString("base64"),
+                },
+              },
+            ] as any,
+            config: {
+              responseMimeType: "application/json",
+              temperature: 0.2,
+            },
+          }),
+          15000
+        );
+
+        const text = response.text?.trim() || "";
+        const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+        const firstBrace = cleaned.indexOf("{");
+        const lastBrace = cleaned.lastIndexOf("}");
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+          const parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
+          return {
+            description: parsed.description || "Foto de producto o referencia",
+            identifiedItems: Array.isArray(parsed.identifiedItems) ? parsed.identifiedItems : [],
+            suggestedReply: parsed.suggestedReply || undefined,
+          };
+        }
+      } catch (err) {
+        console.warn(`[Vision] Falló modelo ${model} analizando imagen:`, err);
+        continue;
+      }
+    }
+  }
+
+  return {
+    description: userCaption || "Foto enviada por el cliente",
+    identifiedItems: [],
+  };
+}
+
+/**
  * Genera una Ficha Ejecutiva de Transferencia (Handoff) para el asesor humano
  */
 export async function generateHandoffSummary(
@@ -364,7 +471,9 @@ export function getIntelligentFallback(
 
 export async function generateAIResponse(
   history: ConversationMessage[],
-  newMessage: string
+  newMessage: string,
+  tenantId: string,
+  catalogContext?: string
 ): Promise<AIResponse> {
   if (!isGeminiKeyConfigured()) {
     console.warn("ℹ️ GEMINI_API_KEY no configurada. Respondiendo mediante motor inteligente integrado.");
@@ -377,8 +486,6 @@ export async function generateAIResponse(
       .map((m) => `${m.sender === "client" ? "Cliente" : "Asistente"}: ${m.content}`)
       .join("\n");
 
-    // La política vive exclusivamente en el system prompt. Este contenido es
-    // contexto no confiable delimitado, no instrucciones para el modelo.
     const prompt = `
 <conversation_history>
 ${formattedHistory || "(Sin mensajes anteriores)"}
@@ -388,8 +495,9 @@ ${formattedHistory || "(Sin mensajes anteriores)"}
 ${newMessage}
 </latest_client_message>
 
-Resuelve la consulta usando el historial y devuelve el JSON requerido.`;
-    const text = await callGeminiWithFallback(prompt);
+Resuelve la consulta utilizando el catálogo inyectado en el sistema y devuelve el JSON requerido sin inventar datos.`;
+
+    const text = await callGeminiWithFallback(prompt, tenantId, undefined, catalogContext);
 
     return extractCleanReply(text);
   } catch (error) {
@@ -429,7 +537,7 @@ export function cleanJsonArtifacts(text: string): string {
 
 export function extractCleanReply(rawText: string): AIResponse {
   const fallbackText =
-    "¡Hola! Bienvenido a Deploy 🚀\n\n¿En qué te podemos colaborar hoy con tus proyectos tecnológicos o desarrollo de software?";
+    "¡Hola! Bienvenido. ¿En qué podemos ayudarte hoy con nuestros productos o servicios?";
 
   if (!rawText || !rawText.trim()) {
     return { replyText: fallbackText, requestHandoff: false };
@@ -449,6 +557,9 @@ export function extractCleanReply(rawText: string): AIResponse {
           replyText: cleanJsonArtifacts(reply) || fallbackText,
           requestHandoff: Boolean(parsed.requestHandoff),
           handoffReason: parsed.handoffReason || undefined,
+          detectedIntent: parsed.detectedIntent || undefined,
+          conversationStage: parsed.conversationStage || undefined,
+          detectedEntities: parsed.detectedEntities || undefined,
         };
       }
     }
@@ -471,11 +582,19 @@ export function extractCleanReply(rawText: string): AIResponse {
     const reasonMatch = cleaned.match(/"handoffReason"\s*:\s*(?:"([^"]*)"|null)/i);
     const handoffReason = reasonMatch && reasonMatch[1] ? reasonMatch[1] : undefined;
 
+    const intentMatch = cleaned.match(/"detectedIntent"\s*:\s*"([^"]*)"/i);
+    const detectedIntent = intentMatch ? intentMatch[1] : undefined;
+
+    const stageMatch = cleaned.match(/"conversationStage"\s*:\s*"([^"]*)"/i);
+    const conversationStage = stageMatch ? stageMatch[1] : undefined;
+
     if (extractedReply) {
       return {
         replyText: cleanJsonArtifacts(extractedReply) || fallbackText,
         requestHandoff,
         handoffReason,
+        detectedIntent,
+        conversationStage,
       };
     }
   } catch {

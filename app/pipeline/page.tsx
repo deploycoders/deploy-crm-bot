@@ -27,6 +27,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { CRM_TAGS, CRMTag, getAllTagsMap, toggleLeadTag } from "@/lib/tags";
 import { exportLeadsToCSV } from "@/lib/export";
+import { useAuth } from "@/context/AuthContext";
 
 export type PipelineStage =
   | "nuevo"
@@ -103,26 +104,37 @@ interface LeadCard {
 const LOCAL_STORAGE_STAGES_KEY = "crm_pipeline_stages";
 
 export default function PipelinePage() {
+  const { activeTenant } = useAuth();
   const [leads, setLeads] = useState<LeadCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedTagFilter, setSelectedTagFilter] = useState<string>("all");
   const [tagsMap, setTagsMap] = useState<Record<string, string[]>>({});
 
+  const storageKey = activeTenant?.id
+    ? `crm_pipeline_stages_${activeTenant.id}`
+    : LOCAL_STORAGE_STAGES_KEY;
+
   // Cargar conversaciones y mapear al pipeline
   const fetchPipelineData = async () => {
     try {
-      const { data: convData, error } = await supabase
+      let query = supabase
         .from("conversations")
         .select("*, contacts(*)")
         .order("last_message_at", { ascending: false });
+
+      if (activeTenant?.id) {
+        query = query.eq("tenant_id", activeTenant.id);
+      }
+
+      const { data: convData, error } = await query;
 
       if (error) throw error;
 
       // Cargar mapeo de etapas personalizadas desde localStorage
       let savedStages: Record<string, PipelineStage> = {};
       try {
-        const raw = localStorage.getItem(LOCAL_STORAGE_STAGES_KEY);
+        const raw = localStorage.getItem(storageKey);
         if (raw) savedStages = JSON.parse(raw);
       } catch {}
 
@@ -164,7 +176,27 @@ export default function PipelinePage() {
 
   useEffect(() => {
     fetchPipelineData();
-  }, []);
+
+    if (!activeTenant?.id) return;
+    const channelName = `pipeline-realtime-${activeTenant.id}`;
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "conversations",
+          filter: `tenant_id=eq.${activeTenant.id}`,
+        },
+        () => fetchPipelineData()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeTenant?.id]);
 
   // Mover lead a otra etapa
   const handleMoveStage = (conversationId: string, newStage: PipelineStage) => {
@@ -175,10 +207,10 @@ export default function PipelinePage() {
 
       // Persistir en localStorage
       try {
-        const raw = localStorage.getItem(LOCAL_STORAGE_STAGES_KEY);
+        const raw = localStorage.getItem(storageKey);
         const map: Record<string, PipelineStage> = raw ? JSON.parse(raw) : {};
         map[conversationId] = newStage;
-        localStorage.setItem(LOCAL_STORAGE_STAGES_KEY, JSON.stringify(map));
+        localStorage.setItem(storageKey, JSON.stringify(map));
       } catch (err) {
         console.error("Error guardando etapa:", err);
       }

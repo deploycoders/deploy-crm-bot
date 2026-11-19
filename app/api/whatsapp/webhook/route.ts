@@ -4,9 +4,11 @@ import {
   generateAIResponse,
   cleanJsonArtifacts,
   transcribeAudioWithGemini,
+  analyzeImageWithGemini,
   generateHandoffSummary,
 } from "@/lib/ai";
 import { sendWhatsAppMessage, downloadWhatsAppMedia } from "@/lib/whatsapp";
+import { searchCatalog, formatCatalogForPrompt } from "@/lib/catalog";
 
 // 1. Verificación del Webhook por parte de Meta (GET)
 export async function GET(request: NextRequest) {
@@ -64,6 +66,24 @@ export async function POST(request: NextRequest) {
         const value = change.value;
         if (!value) continue;
 
+        // Meta identifies the receiving business number on each event. That
+        // immutable provider ID is the only supported way to resolve a tenant.
+        const phoneNumberId = value.metadata?.phone_number_id;
+        const { data: channel } = phoneNumberId
+          ? await supabase
+              .from("tenant_channels")
+              .select("tenant_id")
+              .eq("provider", "whatsapp")
+              .eq("external_id", phoneNumberId)
+              .eq("is_active", true)
+              .maybeSingle()
+          : { data: null };
+        const tenantId = channel?.tenant_id;
+        if (!tenantId) {
+          console.warn(`Webhook ignorado: canal WhatsApp no asociado a un tenant (${phoneNumberId || "sin phone_number_id"}).`);
+          continue;
+        }
+
         // Procesar confirmaciones de entrega y lectura (statuses)
         if (value.statuses && Array.isArray(value.statuses)) {
           for (const statusUpdate of value.statuses) {
@@ -94,7 +114,7 @@ export async function POST(request: NextRequest) {
             const mediaId = msg.audio?.id || msg.voice?.id;
             if (mediaId) {
               console.log(`🎙️ Descargando y transcribiendo nota de voz de ${fromPhone} (Media ID: ${mediaId})...`);
-              const downloaded = await downloadWhatsAppMedia(mediaId);
+              const downloaded = await downloadWhatsAppMedia(mediaId, { tenantId });
               if (downloaded) {
                 const transcription = await transcribeAudioWithGemini(
                   downloaded.buffer,
@@ -109,7 +129,29 @@ export async function POST(request: NextRequest) {
               messageText = "🎤 [Nota de voz recibida]";
             }
           } else if (msg.type === "image") {
-            messageText = msg.image?.caption ? `📷 [Imagen]: ${msg.image.caption}` : "📷 [Imagen recibida]";
+            const mediaId = msg.image?.id;
+            const caption = msg.image?.caption || "";
+            if (mediaId) {
+              console.log(`📷 Descargando y analizando imagen de ${fromPhone} (Media ID: ${mediaId})...`);
+              const downloaded = await downloadWhatsAppMedia(mediaId, { tenantId });
+              if (downloaded) {
+                // Obtener catálogo para que la visión compare y reconozca modelos/referencias reales
+                const catalogItems = await searchCatalog(tenantId, caption || "general", 8);
+                const catalogCtx = formatCatalogForPrompt(catalogItems);
+                const visionResult = await analyzeImageWithGemini(
+                  downloaded.buffer,
+                  downloaded.mimeType,
+                  catalogCtx,
+                  caption
+                );
+                messageText = `📷 [Foto analizada]: "${visionResult.description}"${caption ? ` (Nota: "${caption}")` : ""}`;
+                console.log(`✅ Imagen analizada para ${fromPhone}: "${visionResult.description}"`);
+              } else {
+                messageText = caption ? `📷 [Foto]: ${caption}` : "📷 [Foto recibida]";
+              }
+            } else {
+              messageText = caption ? `📷 [Foto]: ${caption}` : "📷 [Foto recibida]";
+            }
           } else {
             messageText = `[Mensaje de tipo ${msg.type}]`;
           }
@@ -119,6 +161,7 @@ export async function POST(request: NextRequest) {
           const { data: existingContact } = await supabase
             .from("contacts")
             .select("id, name")
+            .eq("tenant_id", tenantId)
             .eq("phone", fromPhone)
             .single();
 
@@ -127,7 +170,7 @@ export async function POST(request: NextRequest) {
           } else {
             const { data: newContact, error: contactError } = await supabase
               .from("contacts")
-              .insert({ phone: fromPhone, name: contactName })
+              .insert({ tenant_id: tenantId, phone: fromPhone, name: contactName })
               .select("id")
               .single();
 
@@ -145,6 +188,7 @@ export async function POST(request: NextRequest) {
           const { data: existingConv } = await supabase
             .from("conversations")
             .select("id, status")
+            .eq("tenant_id", tenantId)
             .eq("contact_id", contactId)
             .order("created_at", { ascending: false })
             .limit(1)
@@ -157,11 +201,14 @@ export async function POST(request: NextRequest) {
             const { data: newConv, error: convError } = await supabase
               .from("conversations")
               .insert({
+                tenant_id: tenantId,
                 contact_id: contactId,
                 channel: "whatsapp",
                 status: "ai_active",
                 last_message_preview: messageText,
                 last_message_at: new Date().toISOString(),
+                last_customer_message_at: new Date().toISOString(),
+                pipeline_stage: "nuevo",
               })
               .select("id, status")
               .single();
@@ -179,6 +226,7 @@ export async function POST(request: NextRequest) {
           const { data: insertedMsg, error: msgInsertErr } = await supabase
             .from("messages")
             .insert({
+              tenant_id: tenantId,
               conversation_id: conversationId,
               sender: "client",
               content: messageText,
@@ -192,13 +240,15 @@ export async function POST(request: NextRequest) {
             currentMsgId = insertedMsg.id;
           }
 
-          // Actualizar vista previa de la conversación
+          // Actualizar vista previa y hora del cliente (Ventana 24h)
           await supabase
             .from("conversations")
             .update({
               last_message_preview: messageText,
               last_message_at: new Date().toISOString(),
+              last_customer_message_at: new Date().toISOString(),
             })
+            .eq("tenant_id", tenantId)
             .eq("id", conversationId);
 
           console.log(`📩 Mensaje de ${fromPhone}: "${messageText}" | Estado: ${convStatus}`);
@@ -210,22 +260,18 @@ export async function POST(request: NextRequest) {
             await supabase
               .from("conversations")
               .update({ status: "ai_active" })
+              .eq("tenant_id", tenantId)
               .eq("id", conversationId);
           }
 
-          // Un nuevo mensaje del cliente reactiva siempre la atención automática.
-          // Así, una intervención previa del asesor no deja el chat silenciado.
+          // FIX CRÍTICO HANDOFF (Pieza 5): Si la conversación está en manos del asesor humano
+          // (waiting_agent o human_takeover), la IA DEBE PERMANECER SILENCIADA para no hablar
+          // encima del asesor. El mensaje del cliente queda guardado en el CRM.
           if (convStatus === "waiting_agent" || convStatus === "human_takeover") {
-            convStatus = "ai_active";
-            await supabase
-              .from("conversations")
-              .update({ status: "ai_active" })
-              .eq("id", conversationId);
-            await supabase.from("messages").insert({
-              conversation_id: conversationId,
-              sender: "system",
-              content: "Atención automática reactivada al recibir un nuevo mensaje del cliente.",
-            });
+            console.log(
+              `⏸️ Mensaje del cliente recibido mientras la conversación está asignada a atención humana (${convStatus}). El bot permanece silenciado.`
+            );
+            continue;
           }
 
           if (convStatus === "ai_active" && conversationId) {
@@ -241,6 +287,7 @@ export async function POST(request: NextRequest) {
               const { data: latestClientMsgs } = await supabase
                 .from("messages")
                 .select("id, created_at")
+                .eq("tenant_id", tenantId)
                 .eq("conversation_id", conversationId)
                 .eq("sender", "client")
                 .order("created_at", { ascending: false })
@@ -257,6 +304,7 @@ export async function POST(request: NextRequest) {
             const { data: currentConv } = await supabase
               .from("conversations")
               .select("status")
+              .eq("tenant_id", tenantId)
               .eq("id", conversationId)
               .single();
 
@@ -269,6 +317,7 @@ export async function POST(request: NextRequest) {
             const { data: historyMsgs } = await supabase
               .from("messages")
               .select("sender, content, created_at")
+              .eq("tenant_id", tenantId)
               .eq("conversation_id", conversationId)
               .order("created_at", { ascending: true })
               .limit(20);
@@ -296,16 +345,24 @@ export async function POST(request: NextRequest) {
 
             console.log(`🤖 Generando respuesta consolidada para ${fromPhone} (${unrepliedClientMsgs.length} mensaje(s)): "${combinedClientText.replace(/\n/g, " // ")}"`);
 
-            // 3. Generar respuesta con Gemini
+            // 3. Consultar la verdad estricta del catálogo para el tenant
+            const catalogItems = await searchCatalog(tenantId, combinedClientText, 6);
+            const catalogContext = formatCatalogForPrompt(catalogItems);
+
+            // Generar respuesta con Gemini inyectando el catálogo real
             const aiResult = await generateAIResponse(
               priorHistory as any,
-              combinedClientText
+              combinedClientText,
+              tenantId,
+              catalogContext
             );
             const finalReplyText = cleanJsonArtifacts(aiResult.replyText);
-            console.log(`🤖 Respuesta IA generada: "${finalReplyText.slice(0, 80)}..." | Handoff: ${aiResult.requestHandoff}`);
+            console.log(
+              `🤖 Respuesta IA generada: "${finalReplyText.slice(0, 80)}..." | Intent: ${aiResult.detectedIntent || "n/a"} | Stage: ${aiResult.conversationStage || "n/a"} | Handoff: ${aiResult.requestHandoff}`
+            );
 
-            // 4. Enviar respuesta por WhatsApp
-            const waResult = await sendWhatsAppMessage(fromPhone, finalReplyText);
+            // 4. Enviar respuesta por WhatsApp con credenciales del tenant
+            const waResult = await sendWhatsAppMessage(fromPhone, finalReplyText, { tenantId });
             if (!waResult.success) {
               console.error("❌ Error enviando mensaje a WhatsApp:", JSON.stringify(waResult.error));
             } else {
@@ -314,6 +371,7 @@ export async function POST(request: NextRequest) {
 
             // 5. Guardar respuesta del bot en Supabase
             await supabase.from("messages").insert({
+              tenant_id: tenantId,
               conversation_id: conversationId,
               sender: "bot",
               content: finalReplyText,
@@ -332,9 +390,11 @@ export async function POST(request: NextRequest) {
                 .from("conversations")
                 .update({
                   status: "waiting_agent",
+                  pipeline_stage: "handoff",
                   last_message_preview: finalReplyText,
                   last_message_at: new Date().toISOString(),
                 })
+                .eq("tenant_id", tenantId)
                 .eq("id", conversationId);
 
               // Guardar la tarjeta ejecutiva estructurada para el asesor
@@ -348,17 +408,23 @@ export async function POST(request: NextRequest) {
               });
 
               await supabase.from("messages").insert({
+                tenant_id: tenantId,
                 conversation_id: conversationId,
                 sender: "system",
                 content: summaryCardContent,
               });
             } else {
+              const updatePayload: Record<string, any> = {
+                last_message_preview: finalReplyText,
+                last_message_at: new Date().toISOString(),
+              };
+              if (aiResult.conversationStage) {
+                updatePayload.pipeline_stage = aiResult.conversationStage;
+              }
               await supabase
                 .from("conversations")
-                .update({
-                  last_message_preview: aiResult.replyText,
-                  last_message_at: new Date().toISOString(),
-                })
+                .update(updatePayload)
+                .eq("tenant_id", tenantId)
                 .eq("id", conversationId);
             }
           } else {

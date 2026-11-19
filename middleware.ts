@@ -3,28 +3,34 @@ import type { NextRequest } from "next/server";
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const authToken = request.cookies.get("crm_auth_token")?.value;
+
+  // Comprobar si existe token de autenticación estricta (cookie CRM o cookie Supabase)
+  const crmAuthToken = request.cookies.get("crm_auth_token")?.value;
+  const hasSupabaseCookie = request.cookies
+    .getAll()
+    .some((c) => c.name.startsWith("sb-") && c.name.endsWith("-auth-token") && c.value);
+
+  const isAuthenticated = Boolean(crmAuthToken || hasSupabaseCookie);
 
   const isLoginPage = pathname === "/login";
   const isProtectedPath =
     pathname === "/" ||
     pathname.startsWith("/chat") ||
     pathname.startsWith("/contactos") ||
-    pathname.startsWith("/configuracion");
+    pathname.startsWith("/pipeline") ||
+    pathname.startsWith("/equipo") ||
+    pathname.startsWith("/configuracion") ||
+    pathname.startsWith("/admin");
 
-  // Si no tiene token y visita una ruta protegida, auto-aprobar sesión de desarrollo local
-  if (!authToken && isProtectedPath) {
-    const response = NextResponse.next();
-    response.cookies.set("crm_auth_token", "authenticated_superadmin", {
-      path: "/",
-      maxAge: 30 * 24 * 60 * 60,
-      sameSite: "lax",
-    });
-    return response;
+  // Autenticación estricta: Redirigir al login si no tiene sesión activa
+  if (!isAuthenticated && isProtectedPath) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    return NextResponse.redirect(url);
   }
 
-  // Si ya tiene token e intenta visitar /login -> redirigir a /
-  if (authToken && isLoginPage) {
+  // Si ya tiene sesión activa y visita /login -> redirigir al Dashboard
+  if (isAuthenticated && isLoginPage) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);

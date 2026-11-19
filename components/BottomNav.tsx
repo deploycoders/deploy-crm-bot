@@ -51,6 +51,12 @@ export function BottomNav() {
       isActive: pathname.startsWith("/contactos"),
     },
     {
+      href: "/catalogo",
+      label: "Catálogo",
+      icon: "inventory_2",
+      isActive: pathname.startsWith("/catalogo"),
+    },
+    {
       href: "/pipeline",
       label: "Flujos",
       icon: "account_tree",

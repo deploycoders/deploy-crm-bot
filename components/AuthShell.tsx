@@ -61,6 +61,7 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
     if (pathname.startsWith("/chat")) return "Bandeja de Mensajes";
     if (pathname.startsWith("/contactos")) return "Directorio de Contactos";
     if (pathname.startsWith("/pipeline")) return "Flujos & Pipeline";
+    if (pathname.startsWith("/catalogo")) return "Catálogo & Stock";
     if (pathname.startsWith("/equipo")) return "Gestión de Equipo";
     if (pathname.startsWith("/configuracion")) return "Configuración";
     return "Deploy Cockpit";
@@ -123,9 +124,9 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
           <header className="hidden md:flex fixed top-0 left-72 right-0 h-16 bg-surface-container-lowest/80 backdrop-blur-xl border-b border-surface-container-high/40 z-40 items-center justify-between px-6">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2 text-on-surface-variant">
-                <span className="material-symbols-outlined text-[18px] text-primary">terminal</span>
+                <span className="material-symbols-outlined text-[18px] text-primary">domain</span>
                 <span className="text-xs uppercase tracking-wider text-outline font-medium">
-                  Operational Environment: Production
+                  {user?.activeTenant?.name ? `Organización Activa: ${user.activeTenant.name}` : "Operational Environment: Production"}
                 </span>
               </div>
             </div>

@@ -11,6 +11,14 @@ export type Permission =
   | "settings:manage"
   | "database:admin";
 
+export interface TenantInfo {
+  id: string;
+  slug: string;
+  name: string;
+  role: "owner" | "admin" | "agent";
+  isActive: boolean;
+}
+
 export interface AuthUser {
   id: string;
   name: string;
@@ -20,21 +28,16 @@ export interface AuthUser {
   permissions: Permission[];
   avatar?: string;
   loggedAt: string;
+  tenantId?: string;
+  tenantName?: string;
+  tenants?: TenantInfo[];
+  activeTenant?: TenantInfo | null;
 }
-
-export const SUPERADMIN_USER: AuthUser = {
-  id: "usr_superadmin_master",
-  name: "Jesús",
-  email: "admin@salesbot.crm",
-  role: "superadmin",
-  roleLabel: "Super Administrador (Acceso Total)",
-  permissions: ["*"],
-  avatar: "https://api.dicebear.com/7.x/bottts/svg?seed=SalesBotAdmin&backgroundColor=08111f",
-  loggedAt: new Date().toISOString(),
-};
 
 export const AUTH_STORAGE_KEY = "crm_user_session";
 export const AUTH_COOKIE_NAME = "crm_auth_token";
+export const ACTIVE_TENANT_COOKIE_NAME = "crm_active_tenant_id";
+export const ACTIVE_TENANT_STORAGE_KEY = "crm_active_tenant_id";
 
 export function setCookie(name: string, value: string, days: number = 30) {
   if (typeof document === "undefined") return;
@@ -55,16 +58,22 @@ export function getCookie(name: string): string | null {
   return matches ? decodeURIComponent(matches[1]) : null;
 }
 
-export function saveSession(user: AuthUser) {
+export function saveSession(user: AuthUser, token?: string) {
   if (typeof window === "undefined") return;
   localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
-  setCookie(AUTH_COOKIE_NAME, "authenticated_superadmin", 30);
+  setCookie(AUTH_COOKIE_NAME, token || user.id, 30);
+  if (user.activeTenant?.id) {
+    localStorage.setItem(ACTIVE_TENANT_STORAGE_KEY, user.activeTenant.id);
+    setCookie(ACTIVE_TENANT_COOKIE_NAME, user.activeTenant.id, 30);
+  }
 }
 
 export function clearSession() {
   if (typeof window === "undefined") return;
   localStorage.removeItem(AUTH_STORAGE_KEY);
+  localStorage.removeItem(ACTIVE_TENANT_STORAGE_KEY);
   deleteCookie(AUTH_COOKIE_NAME);
+  deleteCookie(ACTIVE_TENANT_COOKIE_NAME);
 }
 
 export function loadSession(): AuthUser | null {

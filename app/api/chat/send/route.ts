@@ -1,12 +1,7 @@
 /**
  * app/api/chat/send/route.ts
- * Endpoint para que el asesor humano envíe mensajes por WhatsApp.
- *
- * Mejoras Fase 5:
- *  - Rate limiting server-side (máx 20 msg/min por conversationId)
- *  - Registro de auditoría automático en /api/audit
- *  - Validación de tipo de mensaje más robusta
- *  - Mejor manejo de errores con códigos específicos
+ * Endpoint seguro para que el asesor envíe mensajes por WhatsApp.
+ * Valida autenticación estricta y aislamiento por tenant activo.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -15,13 +10,12 @@ import {
   sendWhatsAppMessage,
   sendWhatsAppImage,
   sendWhatsAppDocument,
+  sendWhatsAppTemplate,
 } from "@/lib/whatsapp";
 import { cancelPendingDebounce } from "@/lib/debounce";
+import { getTenantContext } from "@/lib/tenant";
 
-// ──────────────────────────────────────────────────────────────────────────────
 // Rate limiting server-side (por conversationId)
-// Máx 20 mensajes por ventana de 60 segundos
-// ──────────────────────────────────────────────────────────────────────────────
 interface RateLimitEntry {
   count: number;
   windowStart: number;
@@ -29,14 +23,13 @@ interface RateLimitEntry {
 
 const rateLimitStore = new Map<string, RateLimitEntry>();
 const RATE_LIMIT_MAX = 20;
-const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 60 segundos
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 
 function checkRateLimit(key: string): { allowed: boolean; remaining: number; retryAfterMs: number } {
   const now = Date.now();
   const entry = rateLimitStore.get(key);
 
   if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-    // Nueva ventana
     rateLimitStore.set(key, { count: 1, windowStart: now });
     return { allowed: true, remaining: RATE_LIMIT_MAX - 1, retryAfterMs: 0 };
   }
@@ -50,38 +43,42 @@ function checkRateLimit(key: string): { allowed: boolean; remaining: number; ret
   return { allowed: true, remaining: RATE_LIMIT_MAX - entry.count, retryAfterMs: 0 };
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Función helper para registrar auditoría (fire-and-forget)
-// ──────────────────────────────────────────────────────────────────────────────
-function auditLog(
+// Auditoría interna asíncrona dentro del tenant
+async function recordAudit(
+  tenantId: string,
   action: string,
   userId: string,
   userName: string,
   conversationId: string,
   metadata?: Record<string, unknown>
 ) {
-  // Fire and forget — no bloquea el response
-  fetch(`${process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"}/api/audit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  try {
+    const supabase = getSupabaseAdmin();
+    await supabase.from("audit_log").insert({
+      tenant_id: tenantId,
       action,
-      userId,
-      userName,
-      conversationId,
+      user_id: userId,
+      user_name: userName,
+      conversation_id: conversationId,
       metadata,
-      timestamp: new Date().toISOString(),
-    }),
-  }).catch(() => {
-    // El audit no debe interrumpir el flujo principal
-  });
+      created_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn("[send:audit] No se pudo guardar evento de auditoría:", err);
+  }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// POST Handler
-// ──────────────────────────────────────────────────────────────────────────────
 export async function POST(request: NextRequest) {
   try {
+    // ── 0. Validar contexto de Tenant autenticado ──────────────────────────
+    const tenant = await getTenantContext(request);
+    if (!tenant) {
+      return NextResponse.json(
+        { error: "No autorizado o sin membresía activa en la organización seleccionada" },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
     const {
       conversationId,
@@ -89,12 +86,11 @@ export async function POST(request: NextRequest) {
       type = "text",
       mediaUrl,
       filename,
-      // Metadata del asesor (opcional, enviada por el cliente)
-      agentId = "unknown",
+      agentId = tenant.userId,
       agentName = "Asesor",
     } = body;
 
-    // ── Validaciones ──────────────────────────────────────────────────────────
+    // ── Validaciones de entrada ──────────────────────────────────────────────
     if (!conversationId) {
       return NextResponse.json(
         { error: "Falta parámetro conversationId" },
@@ -109,7 +105,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const allowedTypes = ["text", "image", "document"];
+    const allowedTypes = ["text", "image", "document", "template"];
     if (!allowedTypes.includes(type)) {
       return NextResponse.json(
         { error: `Tipo de mensaje inválido: ${type}. Permitidos: ${allowedTypes.join(", ")}` },
@@ -135,23 +131,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── Cancelar respuesta pendiente del bot ──────────────────────────────────
-    const wasCancelled = cancelPendingDebounce(conversationId);
-    if (wasCancelled) {
-      console.log(`[send] Respuesta del bot cancelada para ${conversationId} por intervención humana`);
-    }
+    // Cancelar respuesta pendiente del bot
+    cancelPendingDebounce(conversationId);
 
     const supabase = getSupabaseAdmin();
 
-    // ── 1. Obtener conversación y teléfono ────────────────────────────────────
+    // ── 1. Obtener conversación validando el Tenant ──────────────────────────
     const { data: conv, error: convError } = await supabase
       .from("conversations")
-      .select("id, contact_id, contacts(phone)")
+      .select("id, contact_id, tenant_id, last_customer_message_at, contacts(phone)")
       .eq("id", conversationId)
+      .eq("tenant_id", tenant.tenantId)
       .single();
 
     if (convError || !conv) {
-      return NextResponse.json({ error: "Conversación no encontrada" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Conversación no encontrada en la organización activa" },
+        { status: 404 }
+      );
     }
 
     const phone = (conv.contacts as any)?.phone;
@@ -162,32 +159,50 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── 2. Enviar por WhatsApp Cloud API ──────────────────────────────────────
-    let waResult: { success: boolean; messageId?: string; error?: any };
+    // ── 2. Enviar por WhatsApp Cloud API usando credenciales del Tenant ──────
+    let waResult: { success: boolean; messageId?: string; error?: any; isWindowError?: boolean };
     let savedContent = text || "";
+    const sendOpts = { tenantId: tenant.tenantId };
 
-    if (type === "image" && mediaUrl) {
-      waResult = await sendWhatsAppImage(phone, mediaUrl, text);
+    if (type === "template") {
+      const templateName = body.templateName || "seguimiento_comercial";
+      const languageCode = body.languageCode || "es";
+      const components = body.templateComponents || [];
+
+      waResult = await sendWhatsAppTemplate(phone, templateName, languageCode, components, sendOpts);
+      savedContent = `📋 [Plantilla Meta: ${templateName}] ${text || ""}`.trim();
+    } else if (type === "image" && mediaUrl) {
+      waResult = await sendWhatsAppImage(phone, mediaUrl, text, sendOpts);
       savedContent = text
         ? `📷 [Imagen]: ${text}\n${mediaUrl}`
         : `📷 [Imagen]: ${mediaUrl}`;
     } else if (type === "document" && mediaUrl) {
-      waResult = await sendWhatsAppDocument(phone, mediaUrl, filename || "documento.pdf", text);
+      waResult = await sendWhatsAppDocument(phone, mediaUrl, filename || "documento.pdf", text, sendOpts);
       savedContent = text
         ? `📄 [Documento ${filename || "PDF"}]: ${text}\n${mediaUrl}`
         : `📄 [Documento ${filename || "PDF"}]: ${mediaUrl}`;
     } else {
-      waResult = await sendWhatsAppMessage(phone, text);
+      waResult = await sendWhatsAppMessage(phone, text, sendOpts);
       savedContent = text;
     }
 
     if (!waResult.success) {
-      console.error("[send] Error al enviar mensaje a WhatsApp:", waResult.error);
-      // No abortamos — guardamos el mensaje de todas formas para no perder el historial
+      console.error(`[send] Error enviando WhatsApp en tenant ${tenant.tenantId}:`, waResult.error);
+      if (waResult.isWindowError) {
+        return NextResponse.json(
+          {
+            error:
+              "Ventana de 24 horas de WhatsApp cerrada (Error 131047). Para contactar a este cliente debes enviar una plantilla preaprobada por Meta.",
+            isWindowError: true,
+          },
+          { status: 403 }
+        );
+      }
     }
 
-    // ── 3. Guardar mensaje en Supabase ────────────────────────────────────────
+    // ── 3. Guardar mensaje en Supabase con tenant_id ──────────────────────────
     const messageInsertData: Record<string, unknown> = {
+      tenant_id: tenant.tenantId,
       conversation_id: conversationId,
       sender: "agent",
       content: savedContent,
@@ -209,23 +224,30 @@ export async function POST(request: NextRequest) {
       throw msgError;
     }
 
-    // ── 4. Actualizar conversación → human_takeover ───────────────────────────
+    // ── 4. Actualizar conversación dentro del Tenant a human_takeover ─────────
     await supabase
       .from("conversations")
       .update({
-        // Los mensajes manuales no desactivan las respuestas automáticas.
-        status: "ai_active",
+        status: "human_takeover",
         last_message_preview: savedContent,
         last_message_at: new Date().toISOString(),
       })
-      .eq("id", conversationId);
+      .eq("id", conversationId)
+      .eq("tenant_id", tenant.tenantId);
 
-    // ── 5. Registrar auditoría (fire-and-forget) ──────────────────────────────
-    auditLog("agent:message_sent", agentId, agentName, conversationId, {
-      type,
-      preview: savedContent.slice(0, 100),
-      whatsappDelivered: waResult.success,
-    });
+    // ── 5. Registrar auditoría con tenant_id ──────────────────────────────────
+    recordAudit(
+      tenant.tenantId,
+      "agent:message_sent",
+      agentId,
+      agentName,
+      conversationId,
+      {
+        type,
+        preview: savedContent.slice(0, 100),
+        whatsappDelivered: waResult.success,
+      }
+    );
 
     return NextResponse.json({
       success: true,

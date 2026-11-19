@@ -1,22 +1,30 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, useTransition } from "react";
+import React, { createContext, useContext, useEffect, useState, useTransition, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
   AuthUser,
   Permission,
-  SUPERADMIN_USER,
+  TenantInfo,
   clearSession,
+  getCookie,
   hasPermission,
   loadSession,
   saveSession,
+  setCookie,
+  ACTIVE_TENANT_COOKIE_NAME,
+  ACTIVE_TENANT_STORAGE_KEY,
 } from "@/lib/auth";
 
 interface AuthContextType {
   user: AuthUser | null;
   loading: boolean;
   isAuthenticated: boolean;
+  tenants: TenantInfo[];
+  activeTenant: TenantInfo | null;
+  setActiveTenant: (tenant: TenantInfo) => void;
+  refreshTenants: () => Promise<void>;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   can: (permission: Permission) => boolean;
@@ -24,51 +32,196 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-function mapSupabaseUserToAuthUser(sbUser: any): AuthUser {
+function mapSupabaseUserToAuthUser(
+  sbUser: any,
+  activeTenant?: TenantInfo | null,
+  tenants?: TenantInfo[]
+): AuthUser {
   const metadata = sbUser.user_metadata || {};
+  const isOwnerOrAdmin = activeTenant?.role === "owner" || activeTenant?.role === "admin";
+  const role = metadata.role || (isOwnerOrAdmin ? "admin" : "agent");
+
   return {
     id: sbUser.id,
     email: sbUser.email || "",
     name: metadata.name || (sbUser.email ? sbUser.email.split("@")[0] : "Usuario"),
-    role: metadata.role || "superadmin",
-    roleLabel: metadata.roleLabel || "Super Administrador (Acceso Total)",
+    role: role,
+    roleLabel:
+      activeTenant?.role === "owner"
+        ? "Propietario de Organización"
+        : activeTenant?.role === "admin"
+        ? "Administrador de Tenant"
+        : "Asesor CRM",
     permissions: (metadata.permissions as Permission[]) || ["*"],
-    avatar: metadata.avatar || "https://api.dicebear.com/7.x/bottts/svg?seed=SalesBotAdmin&backgroundColor=08111f",
+    avatar:
+      metadata.avatar ||
+      `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(
+        sbUser.email || "salesbot"
+      )}&backgroundColor=08111f`,
     loggedAt: new Date().toISOString(),
+    tenantId: activeTenant?.id,
+    tenantName: activeTenant?.name,
+    tenants: tenants || [],
+    activeTenant: activeTenant || null,
   };
 }
 
+async function fetchUserTenants(userId: string): Promise<TenantInfo[]> {
+  try {
+    const { data, error } = await supabase
+      .from("organization_members")
+      .select("tenant_id, role, is_active, tenants(id, slug, name, is_active)")
+      .eq("user_id", userId)
+      .eq("is_active", true);
+
+    if (error || !data) return [];
+
+    return (data || [])
+      .filter((m: any) => m.tenants && m.tenants.is_active !== false)
+      .map((m: any) => ({
+        id: m.tenants.id,
+        slug: m.tenants.slug,
+        name: m.tenants.name,
+        role: m.role as TenantInfo["role"],
+        isActive: m.is_active,
+      }));
+  } catch (err) {
+    console.warn("Error cargando tenants del usuario:", err);
+    return [];
+  }
+}
+
+/**
+ * Si el usuario es el administrador y no tiene ninguna membresía, vincularlo al tenant 'legacy'.
+ */
+async function ensureDefaultMembership(userId: string): Promise<TenantInfo[]> {
+  try {
+    const { data: legacyTenant } = await supabase
+      .from("tenants")
+      .select("id, slug, name, is_active")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (legacyTenant) {
+      // Intentar auto-asignar membresía
+      await supabase.from("organization_members").insert({
+        tenant_id: legacyTenant.id,
+        user_id: userId,
+        role: "owner",
+        is_active: true,
+      });
+
+      return [
+        {
+          id: legacyTenant.id,
+          slug: legacyTenant.slug,
+          name: legacyTenant.name,
+          role: "owner",
+          isActive: true,
+        },
+      ];
+    }
+  } catch {
+    // Continuar si falla
+  }
+  return [];
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(SUPERADMIN_USER);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [tenants, setTenants] = useState<TenantInfo[]>([]);
+  const [activeTenant, setActiveTenantState] = useState<TenantInfo | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
   const router = useRouter();
   const [, startTransition] = useTransition();
+
+  const syncTenantsForUser = useCallback(async (sbUser: any) => {
+    let list = await fetchUserTenants(sbUser.id);
+    if (list.length === 0) {
+      list = await ensureDefaultMembership(sbUser.id);
+    }
+
+    const savedTenantId =
+      getCookie(ACTIVE_TENANT_COOKIE_NAME) ||
+      (typeof window !== "undefined" ? localStorage.getItem(ACTIVE_TENANT_STORAGE_KEY) : null);
+
+    let active = list.find((t) => t.id === savedTenantId) || list[0] || null;
+
+    if (active) {
+      setCookie(ACTIVE_TENANT_COOKIE_NAME, active.id, 30);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(ACTIVE_TENANT_STORAGE_KEY, active.id);
+      }
+    }
+
+    const authUser = mapSupabaseUserToAuthUser(sbUser, active, list);
+    setUser(authUser);
+    setTenants(list);
+    setActiveTenantState(active);
+    return { authUser, active, list };
+  }, []);
+
+  const refreshTenants = useCallback(async () => {
+    if (!user?.id) return;
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user) {
+      await syncTenantsForUser(session.user);
+    }
+  }, [user?.id, syncTenantsForUser]);
+
+  const setActiveTenant = (tenant: TenantInfo) => {
+    setActiveTenantState(tenant);
+    setCookie(ACTIVE_TENANT_COOKIE_NAME, tenant.id, 30);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(ACTIVE_TENANT_STORAGE_KEY, tenant.id);
+    }
+    if (user) {
+      const updatedUser: AuthUser = {
+        ...user,
+        tenantId: tenant.id,
+        tenantName: tenant.name,
+        activeTenant: tenant,
+        roleLabel:
+          tenant.role === "owner"
+            ? "Propietario de Organización"
+            : tenant.role === "admin"
+            ? "Administrador de Tenant"
+            : "Asesor CRM",
+      };
+      setUser(updatedUser);
+      saveSession(updatedUser);
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
 
     async function initSession() {
       try {
-        const { data: { session }, error } = await supabase.auth.getSession();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
         if (session?.user && mounted) {
-          const authUser = mapSupabaseUserToAuthUser(session.user);
-          setUser(authUser);
-          saveSession(authUser);
+          const { authUser } = await syncTenantsForUser(session.user);
+          saveSession(authUser, session.access_token);
         } else {
-          const local = loadSession();
-          if (local && mounted) {
-            setUser(local);
-          } else {
-            // Permitir acceso como Super Administrador por defecto para operar el CRM
-            saveSession(SUPERADMIN_USER);
-            if (mounted) setUser(SUPERADMIN_USER);
+          // Si no hay sesión válida en Supabase, limpiar cualquier resto
+          clearSession();
+          if (mounted) {
+            setUser(null);
+            setTenants([]);
+            setActiveTenantState(null);
           }
         }
       } catch (e) {
-        console.warn("Supabase Auth offline, usando sesión local de Super Administrador");
-        const local = loadSession() || SUPERADMIN_USER;
-        if (mounted) setUser(local);
+        console.warn("Supabase Auth no disponible:", e);
+        if (mounted) {
+          setUser(null);
+          setTenants([]);
+          setActiveTenantState(null);
+        }
       } finally {
         if (mounted) {
           setLoading(false);
@@ -78,17 +231,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     initSession();
 
-    // 2. Escuchar cambios de estado en Supabase Auth en tiempo real
+    // Escuchar cambios de autenticación en Supabase
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === "SIGNED_IN" && session?.user) {
-        const authUser = mapSupabaseUserToAuthUser(session.user);
-        setUser(authUser);
-        saveSession(authUser);
+        const { authUser } = await syncTenantsForUser(session.user);
+        saveSession(authUser, session.access_token);
       } else if (event === "SIGNED_OUT") {
         clearSession();
         setUser(null);
+        setTenants([]);
+        setActiveTenantState(null);
       }
     });
 
@@ -96,7 +250,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [syncTenantsForUser]);
 
   const login = async (email: string, pass: string): Promise<{ success: boolean; error?: string }> => {
     if (!email.trim() || !pass.trim()) {
@@ -104,7 +258,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      // Autenticación estricta contra Supabase Auth
+      // Autenticación estricta en Supabase Auth
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password: pass.trim(),
@@ -113,15 +267,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (error) {
         const msg =
           error.message === "Invalid login credentials"
-            ? "Correo o contraseña incorrectos. Verifica tus datos de Supabase."
+            ? "Correo o contraseña incorrectos. Verifica tus credenciales de Supabase."
             : error.message;
         return { success: false, error: msg };
       }
 
       if (data?.user) {
-        const authUser = mapSupabaseUserToAuthUser(data.user);
-        saveSession(authUser);
-        setUser(authUser);
+        const { authUser } = await syncTenantsForUser(data.user);
+        saveSession(authUser, data.session?.access_token);
 
         startTransition(() => {
           router.push("/");
@@ -148,6 +301,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       clearSession();
       setUser(null);
+      setTenants([]);
+      setActiveTenantState(null);
       startTransition(() => {
         router.push("/login");
         router.refresh();
@@ -165,6 +320,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         loading,
         isAuthenticated: !!user,
+        tenants,
+        activeTenant,
+        setActiveTenant,
+        refreshTenants,
         login,
         logout,
         can,

@@ -25,15 +25,26 @@ import {
 import { playMessageChime, playHandoffAlert, initAudio } from "@/lib/sound";
 import { useAuth } from "@/context/AuthContext";
 import { BotConfig, BotFAQ, DEFAULT_BOT_CONFIG } from "@/lib/botConfig";
+import { tenantRequestHeaders } from "@/lib/tenantClient";
 
 export default function ConfiguracionPage() {
-  const { user } = useAuth();
+  const { user, activeTenant } = useAuth();
 
   // Estados de configuración de IA y Base de Conocimiento
   const [config, setConfig] = useState<BotConfig>(DEFAULT_BOT_CONFIG);
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [savingConfig, setSavingConfig] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // Estados del Canal WhatsApp del Tenant
+  const [waPhoneId, setWaPhoneId] = useState("");
+  const [waAccessToken, setWaAccessToken] = useState("");
+  const [waDisplayName, setWaDisplayName] = useState("WhatsApp Principal");
+  const [waMaskedToken, setWaMaskedToken] = useState("");
+  const [loadingWa, setLoadingWa] = useState(true);
+  const [savingWa, setSavingWa] = useState(false);
+  const [waSavedSuccess, setWaSavedSuccess] = useState(false);
+  const [waError, setWaError] = useState<string | null>(null);
 
   // Modal / Form para agregar nueva FAQ
   const [newFaqQuestion, setNewFaqQuestion] = useState("");
@@ -49,7 +60,9 @@ export default function ConfiguracionPage() {
   useEffect(() => {
     async function fetchConfig() {
       try {
-        const res = await fetch("/api/bot-settings");
+        const res = await fetch("/api/bot-settings", {
+          headers: await tenantRequestHeaders(activeTenant?.id),
+        });
         const data = await res.json();
         if (data.success && data.config) {
           setConfig(data.config);
@@ -60,17 +73,38 @@ export default function ConfiguracionPage() {
         setLoadingConfig(false);
       }
     }
-    fetchConfig();
-  }, []);
 
-  // Guardar configuración completa
+    async function fetchWaChannel() {
+      if (!activeTenant?.id) return;
+      setLoadingWa(true);
+      try {
+        const headers = await tenantRequestHeaders(activeTenant.id);
+        const res = await fetch("/api/channels/whatsapp", { headers });
+        const data = await res.json();
+        if (data.success && data.channel) {
+          setWaPhoneId(data.channel.phoneNumberId || "");
+          setWaDisplayName(data.channel.displayName || "WhatsApp");
+          setWaMaskedToken(data.channel.maskedToken || "");
+        }
+      } catch (err) {
+        console.warn("Error cargando canal WhatsApp:", err);
+      } finally {
+        setLoadingWa(false);
+      }
+    }
+
+    fetchConfig();
+    fetchWaChannel();
+  }, [activeTenant?.id]);
+
+  // Guardar configuración completa del bot
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     setSavedSuccess(false);
     try {
       const res = await fetch("/api/bot-settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await tenantRequestHeaders(activeTenant?.id),
         body: JSON.stringify(config),
       });
       const data = await res.json();
@@ -83,6 +117,45 @@ export default function ConfiguracionPage() {
       alert("No se pudo guardar la configuración");
     } finally {
       setSavingConfig(false);
+    }
+  };
+
+  // Guardar credenciales de WhatsApp del Tenant
+  const handleSaveWaChannel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!waPhoneId.trim() || !activeTenant?.id) return;
+    setSavingWa(true);
+    setWaError(null);
+    setWaSavedSuccess(false);
+
+    try {
+      const headers = await tenantRequestHeaders(activeTenant.id);
+      const res = await fetch("/api/channels/whatsapp", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          phoneNumberId: waPhoneId.trim(),
+          accessToken: waAccessToken.trim() || undefined,
+          displayName: waDisplayName.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setWaError(data.error || "No se pudo guardar la configuración de WhatsApp");
+      } else {
+        setWaSavedSuccess(true);
+        setWaAccessToken("");
+        if (data.channel) {
+          setWaPhoneId(data.channel.phoneNumberId);
+          setWaDisplayName(data.channel.displayName);
+        }
+        setTimeout(() => setWaSavedSuccess(false), 3500);
+      }
+    } catch (err: any) {
+      setWaError(err?.message || "Error al conectar con el servidor");
+    } finally {
+      setSavingWa(false);
     }
   };
 
@@ -402,6 +475,106 @@ export default function ConfiguracionPage() {
             {testResponse}
           </div>
         )}
+      </section>
+
+      {/* SECCIÓN: CREDENCIALES DE WHATSAPP DEL TENANT */}
+      <section className="rounded-xl border border-line bg-panel/80 p-5 sm:p-6 shadow-xl backdrop-blur-xl space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-line pb-4">
+          <div className="flex items-center gap-2.5">
+            <span className="grid size-9 place-items-center rounded-xl bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+              <Phone className="size-5" />
+            </span>
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <span>Canal de WhatsApp de la Organización</span>
+                <span className="text-primary font-mono text-xs font-normal">({activeTenant?.name || "Tenant Activo"})</span>
+              </h2>
+              <p className="text-xs text-slate-400">
+                Credenciales dedicadas de Meta Graph API v22.0 aisladas para esta organización.
+              </p>
+            </div>
+          </div>
+
+          <span className="text-[11px] font-mono text-emerald-400 border border-emerald-500/30 rounded-lg px-2.5 py-1 bg-emerald-500/10 self-start sm:self-auto">
+            {waMaskedToken ? "Token Configurado" : "Sin Token Dedicado"}
+          </span>
+        </div>
+
+        <form onSubmit={handleSaveWaChannel} className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                <span>Phone Number ID (Meta) *</span>
+                <span className="text-[10px] text-slate-500">Identificador inmutable</span>
+              </label>
+              <input
+                type="text"
+                required
+                value={waPhoneId}
+                onChange={(e) => setWaPhoneId(e.target.value)}
+                placeholder="Ej: 1304775179385550"
+                className="w-full rounded-lg border border-line bg-ink/70 px-3.5 py-2 text-xs sm:text-sm text-white placeholder:text-slate-500 outline-none focus:border-signal/50 transition font-mono"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-300">
+                Nombre de la Línea
+              </label>
+              <input
+                type="text"
+                value={waDisplayName}
+                onChange={(e) => setWaDisplayName(e.target.value)}
+                placeholder="Ej: WhatsApp Ventas Caracas"
+                className="w-full rounded-lg border border-line bg-ink/70 px-3.5 py-2 text-xs sm:text-sm text-white placeholder:text-slate-500 outline-none focus:border-signal/50 transition"
+              />
+            </div>
+
+            <div className="sm:col-span-2 space-y-1.5">
+              <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                <span>System User Access Token (Meta)</span>
+                {waMaskedToken && (
+                  <span className="text-[11px] text-emerald-400 font-mono">
+                    Actual: {waMaskedToken}
+                  </span>
+                )}
+              </label>
+              <input
+                type="password"
+                value={waAccessToken}
+                onChange={(e) => setWaAccessToken(e.target.value)}
+                placeholder={waMaskedToken ? "Dejar en blanco para mantener el token actual" : "EAAZ..."}
+                className="w-full rounded-lg border border-line bg-ink/70 px-3.5 py-2 text-xs sm:text-sm text-white placeholder:text-slate-500 outline-none focus:border-signal/50 transition font-mono"
+              />
+            </div>
+          </div>
+
+          {waError && (
+            <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg p-2.5">
+              {waError}
+            </p>
+          )}
+
+          <div className="flex items-center justify-between pt-2">
+            <p className="text-[11px] text-slate-500">
+              Cada mensaje entrante se asocia automáticamente a este tenant según su Phone Number ID.
+            </p>
+            <button
+              type="submit"
+              disabled={savingWa || !waPhoneId.trim()}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-signal px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:bg-emerald-300 active:scale-95 disabled:opacity-50 cursor-pointer"
+            >
+              {savingWa ? (
+                <RefreshCw className="size-3.5 animate-spin" />
+              ) : waSavedSuccess ? (
+                <Check className="size-3.5" />
+              ) : (
+                <Save className="size-3.5" />
+              )}
+              <span>{savingWa ? "Guardando canal..." : waSavedSuccess ? "¡Credenciales Guardadas!" : "Guardar Canal de WhatsApp"}</span>
+            </button>
+          </div>
+        </form>
       </section>
 
       {/* SECCIÓN 4: TELEMETRÍA Y ESTADO DE INFRAESTRUCTURA */}

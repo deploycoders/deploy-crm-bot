@@ -1,20 +1,108 @@
-export async function sendWhatsAppMessage(toPhone: string, text: string) {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+import { getSupabaseAdmin } from "@/lib/supabase";
 
-  if (!token || !phoneNumberId) {
-    console.error("Faltan variables de entorno: WHATSAPP_ACCESS_TOKEN o WHATSAPP_PHONE_NUMBER_ID");
+export interface TenantWhatsAppConfig {
+  channelId?: string;
+  phoneNumberId: string;
+  accessToken: string;
+  displayName?: string;
+  isCustom: boolean;
+}
+
+/**
+ * Resolves the WhatsApp credentials for a given tenant.
+ * Looks up `tenant_channels` first; falls back to environment variables.
+ */
+export async function getTenantWhatsAppConfig(tenantId?: string): Promise<TenantWhatsAppConfig | null> {
+  const envPhoneId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
+  const envToken = process.env.WHATSAPP_ACCESS_TOKEN || "";
+
+  if (tenantId) {
+    try {
+      const supabase = getSupabaseAdmin();
+      const { data: channel } = await supabase
+        .from("tenant_channels")
+        .select("id, external_id, access_token, credentials, display_name")
+        .eq("tenant_id", tenantId)
+        .eq("provider", "whatsapp")
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (channel) {
+        const token =
+          channel.access_token ||
+          (channel.credentials as any)?.access_token ||
+          envToken;
+        const phoneId = channel.external_id || envPhoneId;
+
+        if (phoneId && token) {
+          return {
+            channelId: channel.id,
+            phoneNumberId: phoneId,
+            accessToken: token,
+            displayName: channel.display_name || "WhatsApp",
+            isCustom: !!channel.access_token,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn(`[whatsapp] Error consultando credenciales de tenant ${tenantId}:`, err);
+    }
+  }
+
+  // Fallback a variables de entorno globales si no hay canal de tenant configurado
+  if (envPhoneId && envToken) {
+    return {
+      phoneNumberId: envPhoneId,
+      accessToken: envToken,
+      displayName: "WhatsApp Global (Env)",
+      isCustom: false,
+    };
+  }
+
+  return null;
+}
+
+export interface WhatsAppSendOptions {
+  tenantId?: string;
+  phoneNumberId?: string;
+  accessToken?: string;
+}
+
+async function resolveCredentials(options?: WhatsAppSendOptions): Promise<{ phoneNumberId: string; accessToken: string } | null> {
+  if (options?.phoneNumberId && options?.accessToken) {
+    return { phoneNumberId: options.phoneNumberId, accessToken: options.accessToken };
+  }
+
+  const tenantConfig = await getTenantWhatsAppConfig(options?.tenantId);
+  if (tenantConfig) {
+    return {
+      phoneNumberId: tenantConfig.phoneNumberId,
+      accessToken: tenantConfig.accessToken,
+    };
+  }
+
+  return null;
+}
+
+export async function sendWhatsAppMessage(
+  toPhone: string,
+  text: string,
+  options?: WhatsAppSendOptions
+) {
+  const creds = await resolveCredentials(options);
+  if (!creds) {
+    console.error("Credenciales de WhatsApp no configuradas para el tenant o entorno");
     return { success: false, error: "Credenciales de WhatsApp no configuradas" };
   }
 
-  // Limpiar número: eliminar '+', espacios, guiones y cualquier carácter no numérico
+  const { phoneNumberId, accessToken } = creds;
   const formattedPhone = toPhone.replace(/\D/g, "").trim();
 
   try {
     const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -32,8 +120,16 @@ export async function sendWhatsAppMessage(toPhone: string, text: string) {
     const data = await response.json();
 
     if (!response.ok) {
+      const isWindowError = data?.error?.code === 131047 || data?.error?.error_subcode === 131047;
       console.error("Error al enviar mensaje por WhatsApp API:", data);
-      return { success: false, error: data };
+      return {
+        success: false,
+        error: data,
+        isWindowError,
+        windowErrorMessage: isWindowError
+          ? "Ventana de 24 horas de WhatsApp expirada (Error 131047). Para contactar a este cliente debes usar una plantilla preaprobada por Meta."
+          : undefined,
+      };
     }
 
     return {
@@ -53,23 +149,22 @@ export async function sendWhatsAppMessage(toPhone: string, text: string) {
 export async function sendWhatsAppImage(
   toPhone: string,
   imageUrl: string,
-  caption?: string
+  caption?: string,
+  options?: WhatsAppSendOptions
 ) {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-
-  if (!token || !phoneNumberId) {
+  const creds = await resolveCredentials(options);
+  if (!creds) {
     return { success: false, error: "Credenciales de WhatsApp no configuradas" };
   }
 
-  // Limpiar número: eliminar '+', espacios, guiones y cualquier carácter no numérico
+  const { phoneNumberId, accessToken } = creds;
   const formattedPhone = toPhone.replace(/\D/g, "").trim();
 
   try {
     const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -108,23 +203,22 @@ export async function sendWhatsAppDocument(
   toPhone: string,
   documentUrl: string,
   filename: string,
-  caption?: string
+  caption?: string,
+  options?: WhatsAppSendOptions
 ) {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-
-  if (!token || !phoneNumberId) {
+  const creds = await resolveCredentials(options);
+  if (!creds) {
     return { success: false, error: "Credenciales de WhatsApp no configuradas" };
   }
 
-  // Limpiar número: eliminar '+', espacios, guiones y cualquier carácter no numérico
+  const { phoneNumberId, accessToken } = creds;
   const formattedPhone = toPhone.replace(/\D/g, "").trim();
 
   try {
     const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -161,12 +255,17 @@ export async function sendWhatsAppDocument(
  * Descarga archivos binarios (notas de voz, audios, imágenes) desde WhatsApp Cloud API
  */
 export async function downloadWhatsAppMedia(
-  mediaId: string
+  mediaId: string,
+  options?: { tenantId?: string; accessToken?: string }
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+  let token = options?.accessToken;
+  if (!token) {
+    const creds = await resolveCredentials({ tenantId: options?.tenantId });
+    token = creds?.accessToken;
+  }
 
   if (!token) {
-    console.error("Falta variable de entorno: WHATSAPP_ACCESS_TOKEN para descargar media");
+    console.error("Falta token de WhatsApp para descargar media");
     return null;
   }
 
@@ -218,3 +317,92 @@ export async function downloadWhatsAppMedia(
   }
 }
 
+export interface TemplateComponent {
+  type: "header" | "body" | "button";
+  sub_type?: string;
+  index?: number;
+  parameters: Array<{
+    type: "text" | "currency" | "date_time" | "image" | "document" | "video";
+    text?: string;
+    image?: { link: string };
+    [key: string]: any;
+  }>;
+}
+
+/**
+ * Envía una plantilla preaprobada de Meta WhatsApp Cloud API.
+ * Obligatoria para iniciar conversación o contactar clientes fuera de la ventana de 24 horas.
+ */
+export async function sendWhatsAppTemplate(
+  toPhone: string,
+  templateName: string,
+  languageCode: string = "es",
+  components?: TemplateComponent[],
+  options?: WhatsAppSendOptions
+) {
+  const creds = await resolveCredentials(options);
+  if (!creds) {
+    return { success: false, error: "Credenciales de WhatsApp no configuradas" };
+  }
+
+  const { phoneNumberId, accessToken } = creds;
+  const formattedPhone = toPhone.replace(/\D/g, "").trim();
+
+  try {
+    const payload: any = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: formattedPhone,
+      type: "template",
+      template: {
+        name: templateName,
+        language: { code: languageCode },
+      },
+    };
+
+    if (components && components.length > 0) {
+      payload.template.components = components;
+    }
+
+    const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      const isWindowError = data?.error?.code === 131047 || data?.error?.error_subcode === 131047;
+      console.error("[WhatsApp Template] Error enviando plantilla:", data);
+      return {
+        success: false,
+        error: data,
+        isWindowError,
+      };
+    }
+
+    return {
+      success: true,
+      messageId: data.messages?.[0]?.id,
+      data,
+    };
+  } catch (error) {
+    console.error("[WhatsApp Template] Excepción enviando plantilla:", error);
+    return { success: false, error };
+  }
+}
+
+/**
+ * Determina si el cliente se encuentra dentro de la ventana de 24 horas de WhatsApp
+ * a partir de la fecha de su último mensaje.
+ */
+export function isWithin24Hours(lastCustomerMessageAt?: string | null): boolean {
+  if (!lastCustomerMessageAt) return false;
+  const lastTime = new Date(lastCustomerMessageAt).getTime();
+  if (isNaN(lastTime)) return false;
+  const diffMs = Date.now() - lastTime;
+  return diffMs <= 24 * 60 * 60 * 1000;
+}

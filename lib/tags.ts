@@ -1,3 +1,5 @@
+import { supabase } from "@/lib/supabase";
+
 export interface CRMTag {
   id: string;
   name: string;
@@ -67,12 +69,16 @@ export function getLeadTags(contactId: string): string[] {
   return map[contactId] || [];
 }
 
-export function toggleLeadTag(contactId: string, tagId: string): string[] {
+/**
+ * Alterna una etiqueta localmente y la sincroniza con la base de datos de Supabase.
+ */
+export function toggleLeadTag(contactId: string, tagId: string, tenantId?: string): string[] {
   const map = getAllTagsMap();
   const current = map[contactId] || [];
-  let updated: string[];
+  const exists = current.includes(tagId);
 
-  if (current.includes(tagId)) {
+  let updated: string[];
+  if (exists) {
     updated = current.filter((id) => id !== tagId);
   } else {
     updated = [...current, tagId];
@@ -83,8 +89,65 @@ export function toggleLeadTag(contactId: string, tagId: string): string[] {
   try {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(map));
   } catch (err) {
-    console.error("Error guardando tags:", err);
+    console.error("Error guardando tags en localStorage:", err);
+  }
+
+  // Sincronizar en segundo plano con la base de datos si tenemos tenantId
+  if (tenantId) {
+    if (exists) {
+      supabase
+        .from("contact_tags")
+        .delete()
+        .eq("tenant_id", tenantId)
+        .eq("contact_id", contactId)
+        .eq("tag", tagId)
+        .then(({ error }) => {
+          if (error) console.warn("Aviso al eliminar tag en BD:", error.message);
+        });
+    } else {
+      supabase
+        .from("contact_tags")
+        .insert({
+          tenant_id: tenantId,
+          contact_id: contactId,
+          tag: tagId,
+        })
+        .then(({ error }) => {
+          if (error) console.warn("Aviso al insertar tag en BD:", error.message);
+        });
+    }
   }
 
   return updated;
+}
+
+/**
+ * Carga todos los tags de contactos desde la base de datos para sincronizar con la memoria.
+ */
+export async function loadTagsFromDB(tenantId: string): Promise<Record<string, string[]>> {
+  if (!tenantId) return getAllTagsMap();
+
+  try {
+    const { data, error } = await supabase
+      .from("contact_tags")
+      .select("contact_id, tag")
+      .eq("tenant_id", tenantId);
+
+    if (error || !data) return getAllTagsMap();
+
+    const dbMap: Record<string, string[]> = {};
+    for (const row of data) {
+      if (!dbMap[row.contact_id]) dbMap[row.contact_id] = [];
+      dbMap[row.contact_id].push(row.tag);
+    }
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dbMap));
+    }
+
+    return dbMap;
+  } catch (err) {
+    console.warn("Error cargando tags de base de datos:", err);
+    return getAllTagsMap();
+  }
 }

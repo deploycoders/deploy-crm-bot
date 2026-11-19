@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveBotConfig, saveBotConfig } from "@/lib/botConfig";
+import { getTenantContext, isTenantAdmin } from "@/lib/tenant";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const config = await getActiveBotConfig();
+    const tenant = await getTenantContext(request);
+    if (!tenant) return NextResponse.json({ success: false, error: "No autorizado" }, { status: 401 });
+    const config = await getActiveBotConfig(tenant.tenantId);
     return NextResponse.json({ success: true, config });
   } catch (error: any) {
     console.error("Error al obtener configuración del bot:", error);
@@ -16,8 +19,11 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const tenant = await getTenantContext(request);
+    if (!tenant) return NextResponse.json({ success: false, error: "No autorizado" }, { status: 401 });
+    if (!isTenantAdmin(tenant)) return NextResponse.json({ success: false, error: "Permisos insuficientes" }, { status: 403 });
     const body = await request.json();
-    const result = await saveBotConfig(body);
+    const result = await saveBotConfig(tenant.tenantId, body);
 
     if (!result.success) {
       return NextResponse.json(
@@ -26,7 +32,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const updated = await getActiveBotConfig();
+    const updated = await getActiveBotConfig(tenant.tenantId);
     return NextResponse.json({ success: true, config: updated });
   } catch (error: any) {
     console.error("Error al guardar configuración del bot:", error);

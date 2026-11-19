@@ -25,6 +25,8 @@ import {
   type AuditAction,
 } from "@/lib/audit";
 import { usePermissions } from "@/lib/permissions";
+import { useAuth } from "@/context/AuthContext";
+import { tenantRequestHeaders } from "@/lib/tenantClient";
 
 const ACTION_ICONS: Partial<Record<AuditAction, string>> = {
   "agent:message_sent": "💬",
@@ -58,6 +60,7 @@ const ACTION_COLORS: Partial<Record<AuditAction, string>> = {
 
 export default function AuditLogPage() {
   const { can, isSuperAdmin } = usePermissions();
+  const { activeTenant } = useAuth();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -70,8 +73,9 @@ export default function AuditLogPage() {
       const local = getLocalAuditLog();
       setEvents(local);
 
-      // Luego intentar cargar del servidor
-      const res = await fetch("/api/audit?limit=100");
+      // Luego cargar del servidor autenticado para el tenant activo
+      const headers = await tenantRequestHeaders(activeTenant?.id);
+      const res = await fetch("/api/audit?limit=100", { headers });
       if (res.ok) {
         const data = await res.json();
         if (data.events && data.events.length > 0) {
@@ -109,7 +113,7 @@ export default function AuditLogPage() {
 
   useEffect(() => {
     loadEvents();
-  }, []);
+  }, [activeTenant?.id]);
 
   const handleRefresh = () => {
     setRefreshing(true);
