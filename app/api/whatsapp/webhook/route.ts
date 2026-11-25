@@ -78,7 +78,22 @@ export async function POST(request: NextRequest) {
               .eq("is_active", true)
               .maybeSingle()
           : { data: null };
-        const tenantId = channel?.tenant_id;
+
+        let tenantId = channel?.tenant_id;
+
+        // Fallback seguro: si el phoneNumberId coincide con el configurado en variables de entorno
+        // pero aún no está registrado en tenant_channels, asociar al tenant principal/legacy.
+        if (!tenantId && phoneNumberId && phoneNumberId === process.env.WHATSAPP_PHONE_NUMBER_ID) {
+          const { data: defaultTenant } = await supabase
+            .from("tenants")
+            .select("id")
+            .eq("is_active", true)
+            .order("created_at", { ascending: true })
+            .limit(1)
+            .maybeSingle();
+          tenantId = defaultTenant?.id;
+        }
+
         if (!tenantId) {
           console.warn(`Webhook ignorado: canal WhatsApp no asociado a un tenant (${phoneNumberId || "sin phone_number_id"}).`);
           continue;
@@ -198,7 +213,8 @@ export async function POST(request: NextRequest) {
             conversationId = existingConv.id;
             convStatus = existingConv.status;
           } else {
-            const { data: newConv, error: convError } = await supabase
+            const nowIso = new Date().toISOString();
+            let { data: newConv, error: convError } = await supabase
               .from("conversations")
               .insert({
                 tenant_id: tenantId,
@@ -206,14 +222,32 @@ export async function POST(request: NextRequest) {
                 channel: "whatsapp",
                 status: "ai_active",
                 last_message_preview: messageText,
-                last_message_at: new Date().toISOString(),
-                last_customer_message_at: new Date().toISOString(),
+                last_message_at: nowIso,
+                last_customer_message_at: nowIso,
                 pipeline_stage: "nuevo",
               })
               .select("id, status")
               .single();
 
+            // Fallback si aún no se ha ejecutado la migración 03 (last_customer_message_at / pipeline_stage)
             if (convError) {
+              const fallbackRes = await supabase
+                .from("conversations")
+                .insert({
+                  tenant_id: tenantId,
+                  contact_id: contactId,
+                  channel: "whatsapp",
+                  status: "ai_active",
+                  last_message_preview: messageText,
+                  last_message_at: nowIso,
+                })
+                .select("id, status")
+                .single();
+              newConv = fallbackRes.data;
+              convError = fallbackRes.error;
+            }
+
+            if (convError || !newConv) {
               console.error("Error al crear conversación:", convError);
               continue;
             }
@@ -241,15 +275,27 @@ export async function POST(request: NextRequest) {
           }
 
           // Actualizar vista previa y hora del cliente (Ventana 24h)
-          await supabase
+          const updateNowIso = new Date().toISOString();
+          const { error: convUpdateErr } = await supabase
             .from("conversations")
             .update({
               last_message_preview: messageText,
-              last_message_at: new Date().toISOString(),
-              last_customer_message_at: new Date().toISOString(),
+              last_message_at: updateNowIso,
+              last_customer_message_at: updateNowIso,
             })
             .eq("tenant_id", tenantId)
             .eq("id", conversationId);
+
+          if (convUpdateErr) {
+            await supabase
+              .from("conversations")
+              .update({
+                last_message_preview: messageText,
+                last_message_at: updateNowIso,
+              })
+              .eq("tenant_id", tenantId)
+              .eq("id", conversationId);
+          }
 
           console.log(`📩 Mensaje de ${fromPhone}: "${messageText}" | Estado: ${convStatus}`);
 
@@ -386,7 +432,7 @@ export async function POST(request: NextRequest) {
                 aiResult.handoffReason
               );
 
-              await supabase
+              const { error: handoffUpdErr } = await supabase
                 .from("conversations")
                 .update({
                   status: "waiting_agent",
@@ -396,6 +442,18 @@ export async function POST(request: NextRequest) {
                 })
                 .eq("tenant_id", tenantId)
                 .eq("id", conversationId);
+
+              if (handoffUpdErr) {
+                await supabase
+                  .from("conversations")
+                  .update({
+                    status: "waiting_agent",
+                    last_message_preview: finalReplyText,
+                    last_message_at: new Date().toISOString(),
+                  })
+                  .eq("tenant_id", tenantId)
+                  .eq("id", conversationId);
+              }
 
               // Guardar la tarjeta ejecutiva estructurada para el asesor
               const summaryCardContent = JSON.stringify({
@@ -414,18 +472,30 @@ export async function POST(request: NextRequest) {
                 content: summaryCardContent,
               });
             } else {
+              const botNowIso = new Date().toISOString();
               const updatePayload: Record<string, any> = {
                 last_message_preview: finalReplyText,
-                last_message_at: new Date().toISOString(),
+                last_message_at: botNowIso,
               };
               if (aiResult.conversationStage) {
                 updatePayload.pipeline_stage = aiResult.conversationStage;
               }
-              await supabase
+              const { error: updErr } = await supabase
                 .from("conversations")
                 .update(updatePayload)
                 .eq("tenant_id", tenantId)
                 .eq("id", conversationId);
+
+              if (updErr) {
+                await supabase
+                  .from("conversations")
+                  .update({
+                    last_message_preview: finalReplyText,
+                    last_message_at: botNowIso,
+                  })
+                  .eq("tenant_id", tenantId)
+                  .eq("id", conversationId);
+              }
             }
           } else {
             console.log(`⏸️ IA silenciada para ${fromPhone} (Estado: ${convStatus}). El asesor responderá.`);
