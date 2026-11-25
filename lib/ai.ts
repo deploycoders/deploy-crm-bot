@@ -35,8 +35,9 @@ export interface HandoffSummary {
 
 // Modelos en orden de velocidad, disponibilidad y estabilidad
 const GEMINI_MODELS = [
-  "gemini-3-flash-preview",
-  "gemini-3.1-flash-lite-preview",
+  "gemini-2.0-flash",
+  "gemini-1.5-flash",
+  "gemini-2.5-flash",
 ];
 
 async function callWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -134,7 +135,6 @@ export async function transcribeAudioWithGemini(
   console.log(`🎙️ Transcribiendo audio: ${fileSizeKb}KB, mimeType original="${mimeType}" → normalizado="${normalizedMime}"`);
 
   const AUDIO_MODELS = [
-    "gemini-2.5-flash-preview-04-17",
     "gemini-2.0-flash",
     "gemini-1.5-flash",
   ];
@@ -144,69 +144,8 @@ export async function transcribeAudioWithGemini(
     "Si el audio es inaudible o contiene solo ruido, responde exactamente: [Audio inaudible]. " +
     "Devuelve ÚNICAMENTE el texto transcrito, sin saludos, sin explicaciones, sin comillas adicionales.";
 
-  let uploadedFileName: string | null = null;
-  try {
-    const blob = new Blob([audioBuffer as any], { type: normalizedMime });
-
-    const uploadResult = await callWithTimeout(
-      ai.files.upload({
-        file: blob,
-        config: { mimeType: normalizedMime },
-      }),
-      15000
-    );
-
-    uploadedFileName = uploadResult.name ?? null;
-
-    let fileState = uploadResult;
-    let retries = 0;
-    while ((fileState as any).state === "PROCESSING" && retries < 5) {
-      await new Promise((r) => setTimeout(r, 2000));
-      fileState = await ai.files.get({ name: uploadResult.name! });
-      retries++;
-    }
-
-    if ((fileState as any).state === "FAILED") {
-      throw new Error("El archivo de audio falló al procesarse en Gemini Files API");
-    }
-
-    for (const model of AUDIO_MODELS) {
-      try {
-        const response = await callWithTimeout(
-          ai.models.generateContent({
-            model,
-            contents: [
-              { text: TRANSCRIPTION_PROMPT },
-              {
-                fileData: {
-                  fileUri: uploadResult.uri,
-                  mimeType: normalizedMime,
-                },
-              },
-            ] as any,
-          }),
-          12000
-        );
-
-        const text = response.text?.trim();
-        if (text && text.length > 0) {
-          if (uploadedFileName) {
-            ai.files.delete({ name: uploadedFileName }).catch(() => { });
-          }
-          return text;
-        }
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    if (uploadedFileName) {
-      ai.files.delete({ name: uploadedFileName }).catch(() => { });
-      uploadedFileName = null;
-    }
-  }
-
-  if (audioBuffer.length <= 5 * 1024 * 1024) {
+  // Procesamiento directo en memoria (base64) ultra rápido y sin dependencia de Files API
+  if (audioBuffer.length <= 10 * 1024 * 1024) {
     for (const model of AUDIO_MODELS) {
       try {
         const response = await callWithTimeout(
@@ -227,9 +166,11 @@ export async function transcribeAudioWithGemini(
 
         const text = response.text?.trim();
         if (text && text.length > 0) {
+          console.log(`✅ Audio transcrito exitosamente con ${model}: "${text.slice(0, 60)}..."`);
           return text;
         }
-      } catch {
+      } catch (err: any) {
+        console.warn(`⚠️ Modelo ${model} falló para transcripción:`, err?.message || err);
         continue;
       }
     }
@@ -262,7 +203,6 @@ export async function analyzeImageWithGemini(
 
   const normalizedMime = mimeType.split(";")[0].trim().toLowerCase() || "image/jpeg";
   const VISION_MODELS = [
-    "gemini-2.5-flash-preview-04-17",
     "gemini-2.0-flash",
     "gemini-1.5-flash",
   ];
